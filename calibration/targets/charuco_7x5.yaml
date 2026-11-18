@@ -1,0 +1,17 @@
+# ChArUco calibration target, 7 x 5 squares, fits one Letter or A4 page.
+# Uses the DICT_5X5_250 dictionary, which is NOT an AprilTag family, so this board does not
+# carry 36h11 imagery. It is still a bench-only tool: take it off the phone's view and off the
+# robot after calibrating (FTC rule R202 C is about AprilTag-like imagery on the robot).
+#
+# Generate the printable page with:
+#   calibration/.venv/bin/python calibration/tools/make_board.py calibration/targets/charuco_7x5.yaml --paper letter
+# Then MEASURE one printed square (edge to edge of the black or white square) and type the
+# measured value into squareLength; scale markerLength by the same factor. Set
+# printed_size_verified to true.
+target_type: charuco
+dictionary: DICT_5X5_250
+squaresX: 7
+squaresY: 5
+squareLength: 0.028   # metres, nominal until you measure the print
+markerLength: 0.021   # metres, 0.75 of squareLength
+printed_size_verified: false
