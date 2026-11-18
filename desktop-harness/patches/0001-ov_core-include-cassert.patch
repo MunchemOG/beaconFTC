@@ -1,0 +1,36 @@
+diff --git a/ov_core/src/feat/Feature.h b/ov_core/src/feat/Feature.h
+index f0bd8a8..0b65c52 100644
+--- a/ov_core/src/feat/Feature.h
++++ b/ov_core/src/feat/Feature.h
+@@ -23,6 +23,7 @@
+ #define OV_CORE_FEATURE_H
+ 
+ #include <Eigen/Eigen>
++#include <cassert>
+ #include <iostream>
+ #include <unordered_map>
+ #include <vector>
+diff --git a/ov_core/src/sim/BsplineSE3.h b/ov_core/src/sim/BsplineSE3.h
+index 205288f..5d7f9de 100644
+--- a/ov_core/src/sim/BsplineSE3.h
++++ b/ov_core/src/sim/BsplineSE3.h
+@@ -23,6 +23,7 @@
+ #define OV_CORE_BSPLINESE3_H
+ 
+ #include <Eigen/Eigen>
++#include <cassert>
+ #include <map>
+ #include <vector>
+ 
+diff --git a/ov_core/src/types/Type.h b/ov_core/src/types/Type.h
+index 6135725..7d0e9a4 100644
+--- a/ov_core/src/types/Type.h
++++ b/ov_core/src/types/Type.h
+@@ -23,6 +23,7 @@
+ #define OV_TYPE_TYPE_BASE_H
+ 
+ #include <Eigen/Eigen>
++#include <cassert>
+ #include <memory>
+ 
+ namespace ov_type {
