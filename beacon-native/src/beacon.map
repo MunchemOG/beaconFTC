@@ -1,0 +1,13 @@
+{
+  global:
+    beacon_create;
+    beacon_set_start_pose;
+    beacon_push_odom;
+    beacon_push_frame;
+    beacon_latest_fix;
+    beacon_status;
+    beacon_debug_line;
+    beacon_destroy;
+  local:
+    *;
+};
