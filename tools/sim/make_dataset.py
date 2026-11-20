@@ -89,7 +89,7 @@ def parse_args(argv):
     run.add_argument("--odom-profile", choices=sorted(odomsim.PROFILES), default="nominal",
                      help="nominal: +/-0.5 %% scale, 0.5 deg at 60 s, 1-3 cm slips, exact start; "
                           "hard: +/-1.5 %% scale, 2 deg at 60 s, 4-8 collisions per 150 s with "
-                          "2-5 cm slip and up to 2 deg heading jump, start error 5 cm / 3 deg")
+                          "2-5 cm slip and up to 2 deg heading jump, start error 2 cm / 1 deg")
     run.add_argument("--start-error-cm", type=float, default=None,
                      help="position error of the typed start pose (default: from the profile)")
     run.add_argument("--start-error-deg", type=float, default=None,
@@ -97,6 +97,9 @@ def parse_args(argv):
     run.add_argument("--hive-tips", choices=("auto", "none", "random"), default="auto",
                      help="hive flips during the run (auto: random for match/session/clutter)")
     run.add_argument("--no-venue", action="store_true", help="black background instead of a venue")
+    run.add_argument("--no-render", action="store_true",
+                     help="write every file except the frame PNGs (for odometry variants of an "
+                          "existing run, see make_odom_variant.py)")
     run.add_argument("--workers", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     return p.parse_args(argv)
 
@@ -183,6 +186,17 @@ def wrap(a):
     return (np.asarray(a) + math.pi) % (2 * math.pi) - math.pi
 
 
+def typed_start_pose(x, y, h, seed, err_cm, err_deg):
+    """The start pose the team "typed": truth plus an error of err_cm in a seeded direction and
+    err_deg with a seeded sign. The direction and sign depend only on the seed, not on the size,
+    so changing the size later (rewrite_start.py) keeps the same direction."""
+    srng = np.random.default_rng(seed + 57)
+    ang = srng.uniform(-math.pi, math.pi)
+    sign = srng.choice([-1.0, 1.0])
+    e = err_cm / 100.0
+    return (x + e * math.cos(ang), y + e * math.sin(ang), float(wrap(h + sign * math.radians(err_deg))))
+
+
 def write_pose_csv(path, header, t_ns, cols):
     with open(path, "w") as f:
         f.write(header + "\n")
@@ -254,12 +268,7 @@ def main(argv=None):
         f.write("t_ns," + ",".join(parts) + "\n")
         for tn, tl in zip(t_ns, tilts):
             f.write("%d,%s\n" % (tn, ",".join("%.6f" % tl[p] for p in parts)))
-    srng = np.random.default_rng(args.seed + 57)
-    ang = srng.uniform(-math.pi, math.pi)
-    sign = srng.choice([-1.0, 1.0])
-    e = err_cm / 100.0
-    start = (traj.x[0] + e * math.cos(ang), traj.y[0] + e * math.sin(ang),
-             wrap(traj.h[0] + sign * math.radians(err_deg)))
+    start = typed_start_pose(traj.x[0], traj.y[0], traj.h[0], args.seed, err_cm, err_deg)
     write_pose_csv(os.path.join(out, "start.csv"), "t_ns,x,y,heading", [T0_NS], [[v] for v in start])
 
     frame_t = np.arange(n_frames) / args.fps
@@ -277,7 +286,9 @@ def main(argv=None):
           % (args.traj, n_frames, duration, args.fps, args.width, args.height, len(odom.t),
              args.workers), flush=True)
     t_render = time.time()
-    if args.workers <= 1:
+    if args.no_render:
+        pass
+    elif args.workers <= 1:
         _init_worker(state)
         for k in range(n_frames):
             _render_one(k)

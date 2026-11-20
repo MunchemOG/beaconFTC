@@ -20,18 +20,27 @@ tipping; and the venue.
 | Profile | Scale error per axis | Heading random walk | Collisions | Slip per collision | Heading jump | Start error |
 | --- | --- | --- | --- | --- | --- | --- |
 | `nominal` (default) | ±0.5 % | σ 0.5° at 60 s | `match`: about 1 per 50 s | 1-3 cm | none | 0 |
-| `hard` | ±1.5 % | σ 2° at 60 s | 4-8 per 150 s | 2-5 cm | up to ±2° | 5 cm, 3° |
+| `hard` | ±1.5 % | σ 2° at 60 s | 4-8 per 150 s | 2-5 cm | up to ±2° | 2 cm, 1° |
 
 `--start-error-cm` and `--start-error-deg` override the profile's start error.
 
-**Run accuracy gates on `hard` runs.** Pure odometry nearly passes Stage 1 on `nominal`: it
-passed on 3 of 5 match seeds. On `hard` it fails on every seed by 12-48 cm. To get that baseline,
-`tools/eval/odom_only.py --run RUN --out odom_only.csv` produces the pure-Pinpoint estimate: it
-aligns the odometry once through `start.csv` and never corrects it.
+**Run accuracy gates on `hard` runs.** Pure odometry passes Stage 1 on 3 of 5 `nominal` match
+seeds, so the nominal gate barely tests vision. The `hard` start error (2 cm, 1°) is well under the
+5 cm limit; a run fails only once odometry drifts past 5 cm. On match seeds 1-5 that happens at
+t = 5.0-44.4 s, and the error reaches 0.16-0.33 m. To get that
+pure-Pinpoint baseline, `tools/eval/odom_only.py --run RUN --out odom_only.csv` aligns the
+odometry once through `start.csv` and never corrects it. To change the start error of existing
+runs without re-rendering, use `tools/sim/rewrite_start.py`.
 
 Ready-made `hard` runs, generated 2026-11-17 and gitignored, are in `tools/sim/runs/`:
 - `hard-match-s1` to `hard-match-s5`: `match`, 30 fps;
 - `hard-session-s1`: 20 min, 10 fps.
+
+`tools/sim/runs/nominal-match-s1` … `s8` are the same eight matches (`hard-match-s1` … `s5` and
+`heldout-match-s6` … `s8`) with `nominal` odometry. Each one's `frames/` is a symlink to the hard
+run's frames. They were made with `tools/sim/make_odom_variant.py --from RUN --odom-profile
+nominal --out DIR`, which uses `make_dataset.py --no-render` and checks that every frame-related
+file is byte-identical to the source run.
 
 ## Trajectories (`--traj`)
 

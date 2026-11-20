@@ -39,7 +39,8 @@ PROFILES = {
 }
 # Collisions per 150 s and default start-pose error (cm, deg) for each profile.
 PROFILE_COLLISIONS_PER_150S = {"nominal": None, "hard": (4, 8)}
-PROFILE_START_ERROR = {"nominal": (0.0, 0.0), "hard": (5.0, 3.0)}
+# Hard was 5 cm / 3 deg (F2b); Round 3: that equals the Stage 1 limit at t = 0, so 2 cm / 1 deg.
+PROFILE_START_ERROR = {"nominal": (0.0, 0.0), "hard": (2.0, 1.0)}
 
 
 @dataclass

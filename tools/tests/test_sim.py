@@ -258,7 +258,7 @@ def test_hard_profile_parameters(tmp_path):
     run = _tiny_run(tmp_path, "hard", 7, ["--odom-profile", "hard"])
     meta = json.loads((run / "meta.json").read_text())
     assert meta["odomProfile"] == "hard"
-    assert meta["startErrorCmDeg"] == [5.0, 3.0]
+    assert meta["startErrorCmDeg"] == [2.0, 1.0]
     assert 4 <= len(meta["collisionsS"]) <= 8
     assert all(0.02 <= math.hypot(s["dxRobotM"], s["dyRobotM"]) <= 0.05 for s in meta["slips"])
     assert all(abs(s["headingJumpRad"]) <= math.radians(2) + 1e-12 for s in meta["slips"])
@@ -266,7 +266,9 @@ def test_hard_profile_parameters(tmp_path):
     assert all(abs(v - 1) <= 0.015 for v in meta["odomScale"])
     _, truth = read_csv(run / "truth.csv")
     _, start = read_csv(run / "start.csv")
-    assert abs(math.hypot(start[0, 1] - truth[0, 1], start[0, 2] - truth[0, 2]) - 0.05) < 1e-6
+    assert abs(math.hypot(start[0, 1] - truth[0, 1], start[0, 2] - truth[0, 2]) - 0.02) < 1e-6
+    dh = (start[0, 3] - truth[0, 3] + math.pi) % (2 * math.pi) - math.pi
+    assert abs(abs(math.degrees(dh)) - 1.0) < 1e-3
     # the existing flags still override the profile's start error
     run = _tiny_run(tmp_path, "hard_exact", 7, ["--odom-profile", "hard", "--start-error-cm", "0",
                                                  "--start-error-deg", "0"])
@@ -290,3 +292,41 @@ def test_nominal_profile_unchanged_by_f2b():
     r = odomsim.simulate(t, x, y, h, seed=3, collisions=[5.0])
     assert r.slips[0][3] == 0.0
     assert odomsim.PROFILES["nominal"] == odomsim.OdomParams()
+
+
+def test_rewrite_start_matches_fresh_generation(tmp_path):
+    """rewrite_start.py gives byte-identical start.csv to a fresh run with the new error size."""
+    old = _tiny_run(tmp_path, "old", 3, ["--odom-profile", "hard", "--start-error-cm", "5",
+                                          "--start-error-deg", "3"])
+    fresh = _tiny_run(tmp_path, "fresh", 3, ["--odom-profile", "hard"])
+    r = run_tool("sim/rewrite_start.py", [str(old), "--start-error-cm", "2", "--start-error-deg", "1"],
+                 tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert (old / "start.csv").read_bytes() == (fresh / "start.csv").read_bytes()
+    assert json.loads((old / "meta.json").read_text())["startErrorCmDeg"] == [2.0, 1.0]
+    # a run made with profile defaults is rewritten to the current profile default
+    r = run_tool("sim/rewrite_start.py", [str(fresh)], tmp_path)
+    assert r.returncode == 0 and "[2.0, 1.0]" in r.stdout
+
+
+def test_odom_variant_matches_fresh_generation(tmp_path):
+    """make_odom_variant.py writes the same odom.csv/start.csv as a fresh run of that profile,
+    shares the source's frames by symlink, and keeps every frame-related file identical."""
+    hard = _tiny_run(tmp_path, "hard", 4, ["--odom-profile", "hard"])
+    fresh = _tiny_run(tmp_path, "fresh", 4, ["--odom-profile", "nominal"])
+    out = tmp_path / "variant"
+    r = run_tool("sim/make_odom_variant.py", ["--from", str(hard), "--odom-profile", "nominal",
+                                              "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for name in ("odom.csv", "start.csv", "truth.csv", "hive.csv", "frames.csv", "camera.json",
+                 "field.json"):
+        assert (out / name).read_bytes() == (fresh / name).read_bytes(), name
+    assert (out / "odom.csv").read_bytes() != (hard / "odom.csv").read_bytes()
+    assert os.path.islink(out / "frames")
+    assert os.path.realpath(out / "frames") == os.path.realpath(hard / "frames")
+    assert len(os.listdir(out / "frames")) == 31
+    m_new = json.loads((out / "meta.json").read_text())
+    m_fresh = json.loads((fresh / "meta.json").read_text())
+    for key in ("odomProfile", "odomParams", "odomScale", "slips", "collisionsS",
+                "startErrorCmDeg", "hiveFlipsS", "startPoseTruth"):
+        assert m_new[key] == m_fresh[key], key
