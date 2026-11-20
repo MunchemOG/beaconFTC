@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <set>
 
-#include "features.h"
+#include "orb_features.h"
 
 namespace beacon {
 

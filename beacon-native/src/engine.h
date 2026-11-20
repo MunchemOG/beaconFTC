@@ -64,6 +64,8 @@ struct Shared {
     bool hasStart = false;
     beacon_pose2 start{};
     uint64_t startSeq = 0;
+    uint64_t odomEpoch = 0;      // bumped by beacon_reset_odom_world
+    int64_t odomResetT = 0;
     bool hasFix = false, fixNew = false;
     beacon_fix fix{};
     int status = BEACON_STATUS_INITIALIZING;

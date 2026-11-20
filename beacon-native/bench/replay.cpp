@@ -89,7 +89,9 @@ bool runReplay(const Dataset& d, const std::vector<cv::Mat>* images, const Repla
         if (opt.realtime) {
             std::this_thread::sleep_until(wall0 + std::chrono::nanoseconds(deliver - t0));
         }
+        auto c0 = std::chrono::steady_clock::now();
         int rc = beacon_push_frame(ctx, f.tNs, img.data, img.cols, img.rows, (int)img.step);
+        out.frameMs.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count());
         if (rc == BEACON_ERR) {
             err = "beacon_push_frame rejected frame " + std::to_string(f.idx) + " (size " + std::to_string(img.cols) +
                   "x" + std::to_string(img.rows) + ")";

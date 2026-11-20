@@ -112,6 +112,13 @@ BEACON_JNI(void, nativePushOdom)(JNIEnv*, jclass, jlong h, jlong t, jdouble x, j
   }
 }
 
+BEACON_JNI(void, nativeResetOdomWorld)(JNIEnv*, jclass, jlong h, jlong t) {
+  try {
+    beacon_reset_odom_world(ctx(h), static_cast<int64_t>(t));
+  } catch (...) {
+  }
+}
+
 BEACON_JNI(jint, nativePushFrame)(JNIEnv* env, jclass, jlong h, jlong t, jbyteArray gray,
                                   jint width, jint height, jint stride) {
   if (gray == nullptr || width <= 0 || height <= 0 || stride < width) {

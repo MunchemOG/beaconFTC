@@ -39,3 +39,11 @@ Host-only bench binaries also link OpenCV's bundled libpng/libjpeg-turbo/zlib (p
 - Offline only (field-model derivation, scratch venv, NOT Beacon dependencies): cascadio 0.1.1 (MIT; bundles
   OpenCASCADE, LGPL-2.1), trimesh 5.2.1 (MIT), opencv-python-headless 4.14.0.94, pypdf 5.4.0 (BSD) for reading the
   FIRST PDFs, Python 3.11.14.
+
+## 2026-11-17 java-hub-engineer (Workstream J, TeamCode/)
+| Component | Version | License | Where used |
+| --- | --- | --- | --- |
+| Android NDK (Gradle `ndkVersion` in TeamCode/build.gradle; overrides build.common.gradle's 21.3.6528147, not installed) | 27.0.12077973 | - | libbeacon.so + libbeacon_jni.so in the APK |
+| CMake (Gradle externalNativeBuild) | 3.22.1 (Android SDK) | - | same |
+| JUnit (unchanged) | 4.13.2 | EPL-1.0 | JVM tests |
+| No new Java dependencies: MJPEG, PNG, JSON are our own code; JPEG decode is Android BitmapFactory | - | - | - |

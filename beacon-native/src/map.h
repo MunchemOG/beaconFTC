@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "features.h"
+#include "orb_features.h"
 #include "geometry.h"
 #include "vocab.h"
 
@@ -50,6 +50,7 @@ struct KeyFrame {
     bool bad = false;
     bool hasOdom = false;
     SE2 odom;                     // Pinpoint pose (odometry world) at tNs
+    uint64_t odomEpoch = 0;       // odometry world segment (bumped by beacon_reset_odom_world)
     long localBaFor = -1, fixedBaFor = -1, loopQueryFor = -1, relocQueryFor = -1;
     SE3 twc() const { return tcw.inverse(); }
     Vec3 centre() const { return -(tcw.linear().transpose() * tcw.translation()); }

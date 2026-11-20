@@ -76,6 +76,14 @@ public final class NativeBeacon implements BeaconCore {
     }
 
     @Override
+    public void resetOdomWorld(long tNs) {
+        long h = handle;
+        if (h != 0) {
+            nativeResetOdomWorld(h, tNs);
+        }
+    }
+
+    @Override
     public void pushOdom(long tNs, double x, double y, double heading) {
         long h = handle;
         if (h != 0) {
@@ -132,6 +140,8 @@ public final class NativeBeacon implements BeaconCore {
 
     private static native void nativePushOdom(long h, long tNs, double x, double y,
                                               double heading);
+
+    private static native void nativeResetOdomWorld(long h, long tNs);
 
     private static native int nativePushFrame(long h, long tNs, byte[] gray, int width,
                                               int height, int stride);

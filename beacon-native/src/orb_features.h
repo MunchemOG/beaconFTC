@@ -32,7 +32,9 @@ struct Features {
 class OrbExtractor {
 public:
     OrbExtractor(const Params& p, const Camera& cam);
-    void extract(const cv::Mat& gray, Features& out) const;
+    /** mask (optional, CV_8U, image size): keypoints only where it is nonzero (field-surface
+     *  regions in field mode). Without a mask the whole image is used (explore mode). */
+    void extract(const cv::Mat& gray, Features& out, const cv::Mat& mask = cv::Mat()) const;
     int levels() const { return levels_; }
     float scaleFactor() const { return scale_; }
 

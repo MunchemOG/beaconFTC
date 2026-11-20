@@ -35,6 +35,7 @@ struct ReplayResult {
     std::vector<SE3> finalKeyframes;
     std::vector<Vec3> finalMap;
     int statusAtEnd = 0;
+    std::vector<double> frameMs;  // synchronous mode: time spent in beacon_push_frame per frame
     std::string lastDebug;
 };
 

@@ -37,7 +37,7 @@ add_library(beacon_core STATIC
   src/api.cpp
   src/edges.cpp
   src/explore_engine.cpp
-  src/features.cpp
+  src/orb_features.cpp
   src/field_engine.cpp
   src/field_model.cpp
   src/gate.cpp
@@ -51,13 +51,15 @@ add_library(beacon_core STATIC
   src/predict.cpp
   src/vocab.cpp
 )
+# Only include/ is public: src/ stays private so its headers never shadow system headers
+# for code that links the core (the JNI shim sees just beacon/beacon.h).
 target_include_directories(beacon_core
-  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
-  PRIVATE ${BEACON_TP}/nlohmann/include)
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${BEACON_TP}/nlohmann/include)
 target_link_libraries(beacon_core PUBLIC opencv_core opencv_imgproc opencv_features2d opencv_calib3d
   Eigen3::Eigen Ceres::ceres)
 if(NOT MSVC)
-  target_compile_options(beacon_core PRIVATE -Wall -Wextra -Wno-unused-parameter
+  target_compile_options(beacon_core PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
     -ffunction-sections -fdata-sections)
 endif()
 find_package(Threads REQUIRED)
@@ -66,6 +68,7 @@ target_link_libraries(beacon_core PUBLIC Threads::Threads)
 # --- shared library (the thing the RC app loads) ----------------------------------------------
 add_library(beacon SHARED src/api.cpp)  # api.cpp again so the C API is exported
 target_link_libraries(beacon PRIVATE beacon_core)
+target_include_directories(beacon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(ANDROID)
   target_link_libraries(beacon PRIVATE log)
   target_link_options(beacon PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL -s
@@ -96,10 +99,10 @@ if(BEACON_BUILD_BENCH)
   )
   target_compile_definitions(beacon_bench PUBLIC BEACON_SOURCE_DIR_BENCH="${CMAKE_CURRENT_SOURCE_DIR}")
   target_include_directories(beacon_bench PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/bench
-    PRIVATE ${BEACON_TP}/nlohmann/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src PRIVATE ${BEACON_TP}/nlohmann/include)
   target_link_libraries(beacon_bench PUBLIC beacon_core opencv_imgcodecs opencv_highgui rerun_sdk)
 
-  foreach(tool beacon_replay beacon_live beacon_make_testdata beacon_vocab_train)
+  foreach(tool beacon_replay beacon_live beacon_make_testdata beacon_vocab_train beacon_overlay)
     add_executable(${tool} bench/${tool}.cpp)
     target_link_libraries(${tool} PRIVATE beacon_bench)
     target_include_directories(${tool} PRIVATE ${BEACON_TP}/nlohmann/include)

@@ -25,6 +25,7 @@ public:
     bool process(KeyFrame* kf);
     void setFixedScale(bool f) { fixedScale_ = f; }
     std::string lastMessage;
+    std::string debug;  // last detection attempt, for tuning
 
 private:
     bool detect(KeyFrame* kf, std::vector<KeyFrame*>& candidates);
@@ -48,6 +49,7 @@ private:
     std::vector<int> curMatched_;            // per query feature: loop map point id or -1
     std::vector<MapPoint*> loopPoints_;
     int lastLoopKf_ = -100;
+    double maxLogScale_ = 0.2;        // |log scale| of a loop Sim(3): within ~20 % (global BA keeps drift small)
 };
 
 }  // namespace beacon

@@ -25,6 +25,12 @@ public interface BeaconCore {
     /** Bench-only fix made without odometry; never accepted on a robot. */
     int FIX_NO_ODOM = 8;
 
+    /** beacon_status() codes (BEACON_STATUS_*), equal to the BeaconStatus constants. */
+    int STATUS_INVALID = 0;
+    int STATUS_INITIALIZING = 1;
+    int STATUS_TRACKING = 2;
+    int STATUS_LOST = 3;
+
     /** Pinhole camera with OpenCV distortion (k1, k2, p1, p2, k3), pixels. */
     final class Camera {
         public final int width, height;
@@ -104,6 +110,12 @@ public interface BeaconCore {
     /** beacon_set_start_pose: field-frame robot pose at time t. */
     void setStartPose(long tNs, double x, double y, double heading);
 
+    /**
+     * beacon_reset_odom_world: the odometry world restarted at tNs (Pinpoint reboot). Call it
+     * before the first sample of the new world, from the thread that pushes odometry.
+     */
+    void resetOdomWorld(long tNs);
+
     /** beacon_push_odom: one Pinpoint sample in the odometry world. */
     void pushOdom(long tNs, double x, double y, double heading);
 
@@ -122,6 +134,9 @@ public interface BeaconCore {
     /** beacon_debug_line. */
     String debugLine();
 
-    /** beacon_destroy. Called once, after every other call has returned. */
+    /**
+     * beacon_destroy. Called once, after every other call has returned. It waits for the
+     * frame in progress (tens of ms): never call it on the OpMode loop thread.
+     */
     void destroy();
 }

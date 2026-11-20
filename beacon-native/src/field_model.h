@@ -10,13 +10,17 @@
 
 namespace beacon {
 
-enum class EdgeType { WallFloor, WallTop, RailBottom, Post, Hive };
+enum class EdgeType { WallFloor, WallTop, RailBottom, BottomRail, Post, Hive, Seam };
 
 /** A straight 3-D model edge in the field frame. */
 struct ModelEdge {
     Vec3 a, b;
     EdgeType type;
-    int wall = -1;  // wall index for wall edges, -1 otherwise
+    int wall = -1;          // wall index for wall edges, -1 otherwise
+    std::string part;       // hive edges: "frame" (static), "hive_red", "hive_blue" (these tip)
+    bool isStatic = true;   // false for parts that move during a match
+    int movingPart = -1;    // index into FieldModel::parts for tipping parts
+    int state = -1;         // which of the part's two stable tilts this copy is drawn in
 };
 
 /** A convex planar polygon in the field frame (floor, hive face). */
@@ -27,6 +31,10 @@ struct Surface {
     double d = 0;   // plane: normal . p + d = 0
     bool textured = true;
     bool isFloor = false;
+    std::string part;       // hive faces: frame / hive_red / hive_blue
+    bool convex = true;     // false for keyhole polygons (rib outlines): no inside test
+    int movingPart = -1;    // as in ModelEdge
+    int state = -1;
 
     /** Ray (origin o, direction dir) hit distance along dir, or < 0 if no hit inside polygon. */
     double intersect(const Vec3& o, const Vec3& dir) const;
@@ -38,8 +46,20 @@ struct Wall {
     std::string name;
     Vec2 p0, p1;
     double heightM = 0;
-    double railHeightM = 0;  // z of the lower edge of the opaque top rail (< heightM), 0 = none
+    double railHeightM = 0;     // vertical size of the opaque top rail; its bottom edge is at heightM - railHeightM
+    double bottomRailTopM = 0;  // top edge of the bottom rail (0 = none)
     std::vector<Vec2> posts;
+};
+
+/** A hive part that tips between two stable tilts about a pivot (BIOBUZZ hive_red / hive_blue). */
+struct MovingPart {
+    std::string name;
+    Vec3 point = Vec3::Zero(), axis = Vec3::UnitY();
+    double startTilt = 0;
+    double tilts[2] = {0, 0};
+    int startState = 0;  // index of startTilt in tilts
+    /** Moves a point given in the start pose to tilt state s. */
+    Vec3 moved(const Vec3& p, int s) const;
 };
 
 struct FieldModel {
@@ -50,6 +70,7 @@ struct FieldModel {
     Vec2 gridOrigin = Vec2::Zero();
     std::vector<Wall> walls;
     SE2 hiveNominal;
+    std::vector<MovingPart> parts;  // tipping hive parts (from hive.pivots)
     std::vector<Surface> hiveFaces;  // in the field frame (nominal pose applied)
     std::vector<ModelEdge> edges;    // all model edges, field frame
     Surface floor;

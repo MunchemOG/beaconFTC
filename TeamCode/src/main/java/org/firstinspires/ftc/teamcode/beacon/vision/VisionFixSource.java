@@ -35,13 +35,27 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * </ul>
  * {@code beacon_destroy} must not run while another call is in progress: every call holds the
  * read side of a lock (the frame push only tries it, so it can never block the decode thread)
- * and {@link #stop()} destroys under the write side.
+ * and the core is destroyed under the write side. {@code beacon_destroy} also waits for the
+ * frame the core is working on (tens of ms), so {@link #stop()} never calls it on the caller's
+ * thread (usually the OpMode thread): it hands the shutdown to a "BeaconVisionStop" thread and
+ * returns at once. A later {@link #start()} waits (on its own feeder thread) for that.
  *
  * <h3>Start pose</h3>
  * The core needs the team's start pose in the field frame. It is taken from the localizer
  * (attach it with {@link #attachLocalizer}) whenever the localizer has a new aligned pose that
- * reflects a new {@code setPose} call, and again after the Pinpoint's world restarts (its
- * world epoch changes; the localizer continues from its last pose, and so must the core).
+ * reflects a new {@code setPose} call.
+ *
+ * <h3>Pinpoint reboot</h3>
+ * When the Pinpoint's world epoch changes (it rebooted and restarted at 0, 0, 0) the feeder
+ * calls {@code beacon_reset_odom_world(t)} BEFORE pushing the first sample of the new world,
+ * on the same thread that pushes odometry. The core then re-anchors the new world to its own
+ * last field pose (as the localizer does); no start pose is re-sent.
+ *
+ * <h3>Field mode only</h3>
+ * The core's explore mode (params {@code "mode": "explore"}) publishes poses in its own map
+ * frame, not the field frame. Such poses must never reach the localizer, so a params file
+ * that selects any mode other than "field" keeps vision OFF, and every fix carrying the
+ * bench-only {@code FIX_NO_ODOM} bit is dropped.
  *
  * <h3>Failure is a status, never an exception</h3>
  * Library not loaded, vision disabled, no camera calibration, no field model, the core
@@ -62,6 +76,7 @@ public final class VisionFixSource implements FieldFixSource {
     private volatile boolean running;
     private volatile int generation;
     private Thread feeder;
+    private Thread stopper;
 
     private volatile boolean coreRunning;
     private boolean coreCreated, coreDestroyed;   // guarded by the write lock
@@ -76,13 +91,13 @@ public final class VisionFixSource implements FieldFixSource {
     private Pose3dStamped lastOdom;
     private long lastOdomT = Long.MIN_VALUE;
     private int lastEpoch = Integer.MIN_VALUE;
-    private long epochChangeT = Long.MIN_VALUE;
     private int sentSetPoseCount;
     private final long[] fixT = new long[1];
     private final double[] fixV = new double[7];
 
     // counters
     private volatile long odomPushed, framesPushed, framesBusy, framesRejected, startsSent;
+    private volatile long odomResets;
     private volatile long fixesReceived, fixesDropped;
 
     /** The robot version: native core over JNI. */
@@ -138,10 +153,18 @@ public final class VisionFixSource implements FieldFixSource {
         }
         running = true;
         final int gen = ++generation;
+        final Thread previousStop = stopper;
         state = "vision: starting";
         feeder = new Thread(new Runnable() {
             @Override
             public void run() {
+                if (previousStop != null) {
+                    try {
+                        previousStop.join();      // the old core must be gone first
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
                 feedLoop(gen);
             }
         }, "BeaconVisionFeed");
@@ -149,26 +172,51 @@ public final class VisionFixSource implements FieldFixSource {
         feeder.start();
     }
 
-    /** Stops feeding and destroys the core. Safe twice and before start. */
+    /**
+     * Stops feeding and destroys the core on a background thread; returns at once (safe on the
+     * OpMode thread). Safe twice and before start.
+     */
     public synchronized void stop() {
         boolean wasRunning = running;
         running = false;
         generation++;
         frames.setListener(null);
-        Thread t = feeder;
+        final Thread t = feeder;
         feeder = null;
-        if (t != null) {
-            t.interrupt();
-            try {
-                t.join(2000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+        if (t == null) {
+            return;
         }
-        destroyCore();
+        t.interrupt();
+        coreRunning = false;     // no more calls into the core from here on; destroy follows
         if (wasRunning) {
             state = "vision: stopped";
         }
+        stopper = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    t.join(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                destroyCore();
+            }
+        }, "BeaconVisionStop");
+        stopper.setDaemon(true);
+        stopper.start();
+    }
+
+    /** Waits up to {@code ms} for a previous {@link #stop()} to finish; true if it has. */
+    public boolean awaitStopped(long ms) throws InterruptedException {
+        Thread s;
+        synchronized (this) {
+            s = stopper;
+        }
+        if (s != null) {
+            s.join(ms);
+            return !s.isAlive();
+        }
+        return true;
     }
 
     private void destroyCore() {
@@ -259,6 +307,13 @@ public final class VisionFixSource implements FieldFixSource {
                 state = "vision: OFF, " + e.getMessage();
                 return false;
             }
+            String mode = paramsMode(params);
+            if (!"field".equals(mode)) {
+                state = "vision: OFF, " + cfg.vision.paramsFile + " sets mode \"" + mode
+                        + "\"; only \"field\" mode gives field-frame fixes (explore mode "
+                        + "poses are in its own map frame)";
+                return false;
+            }
         }
         camera = cam;
         String[] err = new String[1];
@@ -276,6 +331,7 @@ public final class VisionFixSource implements FieldFixSource {
         lock.writeLock().lock();
         try {
             coreCreated = true;
+            coreDestroyed = false;
             if (!alive(gen)) {
                 coreDestroyed = true;     // stop() came while we were creating
                 core.destroy();
@@ -287,6 +343,25 @@ public final class VisionFixSource implements FieldFixSource {
         }
         state = "vision: running";
         return true;
+    }
+
+    /** The core's "mode" from a params JSON: "field" when absent; the reason if unreadable. */
+    @SuppressWarnings("unchecked")
+    static String paramsMode(String paramsJson) {
+        Object o;
+        try {
+            o = org.firstinspires.ftc.teamcode.beacon.MiniJson.parse(paramsJson);
+        } catch (BeaconException e) {
+            return "unreadable params JSON: " + e.getMessage();
+        }
+        if (!(o instanceof java.util.Map)) {
+            return "params JSON is not an object";
+        }
+        Object m = ((java.util.Map<String, Object>) o).get("mode");
+        if (m == null) {
+            return "field";
+        }
+        return m instanceof String ? (String) m : String.valueOf(m);
     }
 
     private static String read(String path, String what) throws BeaconException {
@@ -331,7 +406,8 @@ public final class VisionFixSource implements FieldFixSource {
             return;
         }
         if (lastEpoch != Integer.MIN_VALUE && s.worldEpoch != lastEpoch) {
-            epochChangeT = s.tNs;     // odometry world restarted: resend the start pose
+            core.resetOdomWorld(s.tNs);   // Pinpoint rebooted: new world starts with this sample
+            odomResets++;
         }
         lastEpoch = s.worldEpoch;
         lastOdomT = s.tNs;
@@ -347,14 +423,9 @@ public final class VisionFixSource implements FieldFixSource {
         }
         int count = loc.getPoseSetPoseCount();   // read BEFORE the pose (see its Javadoc)
         Pose2dStamped p = loc.getPose();
-        boolean newSetPose = count != sentSetPoseCount;
-        boolean afterReset = epochChangeT != Long.MIN_VALUE && p.tNs >= epochChangeT;
-        if ((newSetPose || afterReset) && loc.isAligned() && p.status == BeaconStatus.TRACKING) {
+        if (count != sentSetPoseCount && loc.isAligned() && p.status == BeaconStatus.TRACKING) {
             core.setStartPose(p.tNs, p.x, p.y, p.heading);
             sentSetPoseCount = count;
-            if (afterReset) {
-                epochChangeT = Long.MIN_VALUE;
-            }
             startsSent++;
         }
     }
@@ -437,9 +508,14 @@ public final class VisionFixSource implements FieldFixSource {
         return fix;
     }
 
-    /** The core's status (BeaconStatus code); INVALID when the core is not running. */
+    /** The core's status (BeaconCore.STATUS_*, equal to BeaconStatus); INVALID when off. */
     public int status() {
-        return coreRunning ? coreStatus : BeaconStatus.INVALID;
+        return coreRunning ? coreStatus : BeaconCore.STATUS_INVALID;
+    }
+
+    /** Times the core was told the odometry world restarted (Pinpoint reboots). */
+    public long getOdomResets() {
+        return odomResets;
     }
 
     public long getOdomPushed() {

@@ -280,7 +280,7 @@ static int bundle(Map& map, const std::vector<KeyFrame*>& opt, const std::vector
         for (size_t i = 1; i < ids.size(); ++i) {
             KeyFrame* a = map.kf(ids[i - 1]);
             KeyFrame* b = map.kf(ids[i]);
-            if (!a->hasOdom || !b->hasOdom) continue;
+            if (!a->hasOdom || !b->hasOdom || a->odomEpoch != b->odomEpoch) continue;
             // Only for neighbours in time (no other good keyframe in between).
             bool between = false;
             for (int k = ids[i - 1] + 1; k < ids[i]; ++k)
@@ -308,7 +308,7 @@ static int bundle(Map& map, const std::vector<KeyFrame*>& opt, const std::vector
     ceres::Solver::Options so;
     so.linear_solver_type = ceres::DENSE_SCHUR;
     so.max_num_iterations = iterations;
-    so.num_threads = 4;
+    so.num_threads = 1;  // deterministic replays
     so.logging_type = ceres::SILENT;
     ceres::Solver::Summary sum;
     ceres::Solve(so, &problem, &sum);
@@ -475,7 +475,7 @@ void optimizeEssentialGraph(Map& map, KeyFrame* loopKf, KeyFrame* curKf, const s
         // Odometry edges between consecutive keyframes (metric, SE3).
         KeyFrame* prev = nullptr;
         for (KeyFrame* k : kfs) {
-            if (prev && prev->hasOdom && k->hasOdom) {
+            if (prev && prev->hasOdom && k->hasOdom && prev->odomEpoch == k->odomEpoch) {
                 SE3 m = odomRelative(prev, k, tRobotCam);
                 double sT = op.sigmaTBase + op.sigmaTPerM * m.translation().norm();
                 addEdge(prev->id, k->id, Sim3(m), std::min(1.0, 0.01 / sT));
@@ -504,7 +504,7 @@ void optimizeEssentialGraph(Map& map, KeyFrame* loopKf, KeyFrame* curKf, const s
     so.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
     so.sparse_linear_algebra_library_type = ceres::EIGEN_SPARSE;
     so.max_num_iterations = 20;
-    so.num_threads = 4;
+    so.num_threads = 1;  // deterministic replays
     so.logging_type = ceres::SILENT;
     ceres::Solver::Summary sum;
     ceres::Solve(so, &problem, &sum);

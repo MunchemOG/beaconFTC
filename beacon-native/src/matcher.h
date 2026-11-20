@@ -5,7 +5,7 @@
 
 #include <vector>
 
-#include "features.h"
+#include "orb_features.h"
 #include "map.h"
 
 namespace beacon {
@@ -23,6 +23,7 @@ struct Frame {
     FeatureVector fv;
     bool hasOdom = false;
     SE2 odom;
+    uint64_t odomEpoch = 0;
     int refKf = -1;
     void reset(size_t n) {
         mps.assign(n, -1);
@@ -67,6 +68,9 @@ public:
     int searchByBoW(KeyFrame* kf, Frame& F, std::vector<int>& out) const;
     /** Keyframe-keyframe by vocabulary node; out[i1] = map point id of k2 or -1. */
     int searchByBoW(KeyFrame* k1, KeyFrame* k2, std::vector<int>& out) const;
+    /** Keyframe-keyframe, all pairs of features that both carry map points (loop verification:
+     *  higher recall than by-node matching, affordable for a few candidates). */
+    int searchBruteForce(KeyFrame* k1, KeyFrame* k2, std::vector<int>& out) const;
     /** Two frames, window search around previous match positions (monocular init). */
     int searchForInitialization(const Features& f1, const Features& f2, std::vector<cv::Point2f>& prev,
                                 std::vector<int>& matches12, int window) const;

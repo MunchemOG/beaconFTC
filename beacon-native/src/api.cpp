@@ -178,6 +178,14 @@ extern "C" void beacon_push_odom(beacon_ctx* c, const beacon_pose2* p) {
     c->shared.odom.push(p->t_ns, SE2(p->x, p->y, p->heading));
 }
 
+extern "C" void beacon_reset_odom_world(beacon_ctx* c, int64_t t) {
+    if (c == nullptr) return;
+    std::lock_guard<std::mutex> lock(c->shared.mu);
+    c->shared.odom.clear();
+    c->shared.odomEpoch++;
+    c->shared.odomResetT = t;
+}
+
 extern "C" int beacon_push_frame(beacon_ctx* c, int64_t t, const uint8_t* gray, int w, int h,
                                  int stride) {
     if (c == nullptr || gray == nullptr) return BEACON_ERR;

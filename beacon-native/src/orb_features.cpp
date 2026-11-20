@@ -1,4 +1,4 @@
-#include "features.h"
+#include "orb_features.h"
 
 #include <algorithm>
 #include <cmath>
@@ -44,7 +44,8 @@ float icAngle(const cv::Mat& img, const cv::Point2f& pt) {
 
 }  // namespace
 
-void OrbExtractor::extract(const cv::Mat& gray, Features& f) const {
+void OrbExtractor::extract(const cv::Mat& gray, Features& f, const cv::Mat& mask) const {
+    const bool useMask = !mask.empty() && mask.size() == gray.size() && mask.type() == CV_8U;
     f = Features();
     f.width = gray.cols;
     f.height = gray.rows;
@@ -75,6 +76,17 @@ void OrbExtractor::extract(const cv::Mat& gray, Features& f) const {
             for (int c = 0; c < nCols; ++c) {
                 int x0 = minX + c * cell, y0 = minY + r * cell;
                 int x1 = std::min(x0 + cell + 6, maxX), y1 = std::min(y0 + cell + 6, maxY);
+                if (useMask) {
+                    // Skip cells with no allowed pixel at their centre or corners (level-0 coordinates).
+                    bool any = false;
+                    const int xs[3] = {x0, (x0 + x1) / 2, x1 - 1}, ys[3] = {y0, (y0 + y1) / 2, y1 - 1};
+                    for (int a = 0; a < 3 && !any; ++a)
+                        for (int b = 0; b < 3 && !any; ++b) {
+                            int mx = std::min(mask.cols - 1, cvRound(xs[a] * sc)), my = std::min(mask.rows - 1, cvRound(ys[b] * sc));
+                            any = mask.at<uint8_t>(my, mx) != 0;
+                        }
+                    if (!any) continue;
+                }
                 cv::Mat roi = level(cv::Range(y0, y1), cv::Range(x0, x1));
                 std::vector<cv::KeyPoint> cellKps;
                 cv::FAST(roi, cellKps, fast_, true);
@@ -84,6 +96,10 @@ void OrbExtractor::extract(const cv::Mat& gray, Features& f) const {
                     k.pt.y += y0;
                     if (k.pt.x < kEdge || k.pt.y < kEdge || k.pt.x >= level.cols - kEdge || k.pt.y >= level.rows - kEdge)
                         continue;
+                    if (useMask) {
+                        int mx = std::min(mask.cols - 1, cvRound(k.pt.x * sc)), my = std::min(mask.rows - 1, cvRound(k.pt.y * sc));
+                        if (!mask.at<uint8_t>(my, mx)) continue;
+                    }
                     cells[r * nCols + c].push_back(k);
                 }
             }
@@ -100,6 +116,7 @@ void OrbExtractor::extract(const cv::Mat& gray, Features& f) const {
                 k.angle = icAngle(level, k.pt);
                 k.octave = l;
                 k.size = 31 * sc;
+                // Level -> level-0 coordinates the way OpenCV's descriptor code reads them back.
                 k.pt.x *= sc;
                 k.pt.y *= sc;
                 kps.push_back(k);

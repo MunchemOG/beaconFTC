@@ -14,7 +14,7 @@
 #include <opencv2/calib3d.hpp>
 
 #include "engine.h"
-#include "features.h"
+#include "orb_features.h"
 #include "init_mono.h"
 #include "loop.h"
 #include "map.h"
@@ -32,8 +32,14 @@ double yawOf(const Mat3& R) { return std::atan2(R(1, 0), R(0, 0)); }
 
 class ExploreEngine : public Engine {
 public:
+    static Params doubled(const Params& p) {
+        Params q = p;
+        q.orbFeatures *= 2;
+        return q;
+    }
+
     ExploreEngine(Shared& s)
-        : s_(s), p_(s.params), orb_(s.params, s.camera),
+        : s_(s), p_(s.params), initParams_(doubled(s.params)), orb_(s.params, s.camera), initOrb_(initParams_, s.camera),
           cam_{s.camera.fx, s.camera.fy, s.camera.cx, s.camera.cy, s.camera.width, s.camera.height} {
         if (!p_.vocabularyPath.empty()) vocOk_ = voc_.load(p_.vocabularyPath);
         loop_ = std::make_unique<LoopCloser>(map_, voc_, cam_, false, s.tRobotCam, odomParams_, p_.exploreGlobalBA);
@@ -44,9 +50,16 @@ public:
         F = Frame();
         F.id = frameCount_++;
         F.tNs = t;
-        orb_.extract(gray, F.f);
+        // Before the map exists, extract twice as many features (more matches for the two-view
+        // initialization), as ORB-SLAM does.
+        if (state_ == State::NotInit && !useOdom_ && s.odom.empty()) initOrb_.extract(gray, F.f);
+        else orb_.extract(gray, F.f);
         F.reset(F.f.size());
         if (!s.odom.empty()) useOdom_ = true;
+        {
+            std::lock_guard<std::mutex> l(s.mu);
+            F.odomEpoch = s.odomEpoch;
+        }
         if (useOdom_) F.hasOdom = s.odom.at(t, (int64_t)(p_.odomMaxExtrapolateS * 1e9), F.odom);
         loop_->setFixedScale(useOdom_);
         newPoints_.clear();
@@ -222,6 +235,7 @@ private:
         k->mps.assign(F.f.size(), -1);
         k->hasOdom = F.hasOdom;
         k->odom = F.odom;
+        k->odomEpoch = F.odomEpoch;
         voc_.transform(k->f.desc, k->bow, k->fv, 2);
         return k;
     }
@@ -234,7 +248,7 @@ private:
         Frame& F = cur_;
         PosePrior prior;
         // Prediction: odometry when available, else constant velocity.
-        if (useOdom_ && F.hasOdom && last_.hasOdom && last_.hasPose) {
+        if (useOdom_ && F.hasOdom && last_.hasOdom && last_.hasPose && last_.odomEpoch == F.odomEpoch) {
             SE3 rel = s_.tRobotCam.inverse() * (last_.odom.inverse() * F.odom).toSE3() * s_.tRobotCam;
             F.tcw = (last_.tcw.inverse() * rel).inverse();
             double d = rel.translation().norm();
@@ -252,22 +266,32 @@ private:
         bool recentReloc = F.id < lastRelocFrame_ + 20;
         if (state_ == State::Ok || state_ == State::Coasting) {
             float th = state_ == State::Coasting ? 25.f : 15.f;
-            Matcher m = matcher();
-            int nm = m.searchByProjection(F, last_, th);
-            if (nm < 20) {
+            // Two motion hypotheses: the prediction (odometry or constant velocity) and "no
+            // motion" (a shaking hand-held camera reverses often). Keep the better supported.
+            std::vector<SE3> hyps = {F.tcw};
+            if (!prior.use && hasVelocity_ && last_.hasPose) hyps.push_back(last_.tcw);
+            int bestIn = -1;
+            Frame best;
+            for (const SE3& h : hyps) {
                 F.reset(F.f.size());
-                nm = m.searchByProjection(F, last_, 2 * th);
+                F.tcw = h;
+                Matcher m = matcher();
+                int nm = m.searchByProjection(F, last_, th);
+                if (nm < 20) {
+                    F.reset(F.f.size());
+                    nm = m.searchByProjection(F, last_, 2 * th);
+                }
+                int in1 = nm >= 20 ? optimizeAndClean(prior) : 0;
+                if (in1 < 0.4 * nm) in1 = std::min(in1, 9);  // mostly outliers: not trusted
+                if (in1 > bestIn) {
+                    bestIn = in1;
+                    best = F;
+                }
             }
-            int in1 = nm >= 20 ? optimizeAndClean(prior) : 0;
-            ok = in1 >= 10;
+            F = best;
+            ok = bestIn >= 15;
             if (!ok && refKf_) ok = trackReferenceKeyFrame(prior);
-            char b[96];
-            int lastValid = 0;
-            for (size_t i = 0; i < last_.mps.size(); ++i)
-                if (last_.mps[i] >= 0 && !last_.outlier[i] && map_.mp(last_.mps[i]) && !map_.mp(last_.mps[i])->bad) ++lastValid;
-            std::snprintf(b, sizeof b, "mm %d/%d (last %d, v %.3f %.2fdeg) ref %d ", nm, in1, lastValid,
-                          velocity_.translation().norm(), Eigen::AngleAxisd(velocity_.linear()).angle() * 57.3, ok ? 1 : 0);
-            dbg_ = b;
+            dbg_ = "mm " + std::to_string(bestIn) + (ok ? " ok " : " fail ");
             if (!ok && state_ == State::Coasting && useOdom_) ok = trackLocalMapFrom(prior, 6.f);
         }
         if (!ok && (state_ == State::Lost || (state_ == State::Coasting && F.id % 5 == 0))) ok = relocalize();
@@ -295,6 +319,14 @@ private:
             F.reset(F.f.size());
             state_ = State::Coasting;
             status_ = "coasting on odometry";
+            // Keep mapping from the odometry pose so the map grows into the new view and
+            // tracking can resume (points are triangulated against the previous keyframes).
+            bool moved = false;
+            if (lastKf_ && lastKf_->hasOdom && lastKf_->odomEpoch == F.odomEpoch) {
+                SE2 d = lastKf_->odom.inverse() * F.odom;
+                moved = std::hypot(d.x, d.y) > 0.08 || std::abs(d.theta) > 0.12;
+            }
+            if (moved || F.id >= lastKfFrame_ + 10) createKeyFrame();
             return false;
         }
         F.hasPose = false;
@@ -492,7 +524,7 @@ private:
         bool c1 = F.id >= lastKfFrame_ + p_.exploreMinFramesBetweenKf || tracked < 60;
         bool c2 = (tracked < refMatches * 0.9 || F.id >= lastKfFrame_ + maxFrames) && tracked > 15;
         bool moved = false;
-        if (useOdom_ && lastKf_ && lastKf_->hasOdom && F.hasOdom) {
+        if (useOdom_ && lastKf_ && lastKf_->hasOdom && F.hasOdom && lastKf_->odomEpoch == F.odomEpoch) {
             SE2 d = lastKf_->odom.inverse() * F.odom;
             moved = std::hypot(d.x, d.y) > 0.25 || std::abs(d.theta) > 0.26;
         }
@@ -516,18 +548,52 @@ private:
         lastKfFrame_ = F.id;
         localMapping(k);
         if (vocOk_ && p_.exploreLoopClosing) {
-            if (loop_->process(k)) {
+            bool closed = loop_->process(k);
+            if (!loop_->debug.empty() && std::getenv("BEACON_LOOP_DEBUG")) std::fprintf(stderr, "loopdbg %s\n", loop_->debug.c_str());
+            if (closed) {
                 // The current frame moved with its keyframe.
                 F.tcw = k->tcw;
                 last_.hasPose = false;
                 hasVelocity_ = false;
                 loops_++;
                 status_ = loop_->lastMessage;
+                if (std::getenv("BEACON_LOOP_DEBUG")) std::fprintf(stderr, "LOOP %s\n", status_.c_str());
             }
         } else {
             map_.db.add(k->id, k->bow);
         }
+        checkReobservationLoop(k);
         mapChanged_ = true;
+    }
+
+    // A loop closed by tracking itself: the new keyframe re-observes points of a keyframe made
+    // long ago (the place-recognition loop closer never fires then, because that keyframe is
+    // already connected and excluded from its candidates). The local BA held the old part of
+    // the map fixed, so the remaining inconsistency is spread with a global BA (the "snap" in
+    // the reference videos). Logged as a loop closure.
+    void checkReobservationLoop(KeyFrame* k) {
+        if (k->id < lastReobsLoopKf_ + p_.exploreReobsMinGapKf / 2) return;
+        KeyFrame* oldest = nullptr;
+        for (int id : k->ordered) {
+            KeyFrame* o = map_.kf(id);
+            if (!o || o->bad || k->conn[id] < 20) continue;
+            if (k->id - o->id < p_.exploreReobsMinGapKf || (k->tNs - o->tNs) * 1e-9 < 20.0) continue;
+            if (!oldest || o->id < oldest->id) oldest = o;
+        }
+        if (!oldest || k->loopEdges.count(oldest->id)) return;
+        k->loopEdges.insert(oldest->id);
+        oldest->loopEdges.insert(k->id);
+        map_.loopLinks.push_back({oldest->id, k->id});
+        lastReobsLoopKf_ = k->id;
+        loops_++;
+        if (p_.exploreGlobalBA) globalBundleAdjustment(map_, cam_, p_.exploreGlobalBAIterations, useOdom_, s_.tRobotCam, odomParams_);
+        cur_.tcw = k->tcw;
+        last_.hasPose = false;
+        hasVelocity_ = false;
+        char b[128];
+        std::snprintf(b, sizeof b, "loop (re-observation): keyframe %d <-> %d", k->id, oldest->id);
+        status_ = b;
+        if (std::getenv("BEACON_LOOP_DEBUG")) std::fprintf(stderr, "LOOP %s\n", b);
     }
 
     void localMapping(KeyFrame* k) {
@@ -745,7 +811,8 @@ private:
 
     Shared& s_;
     const Params& p_;
-    OrbExtractor orb_;
+    Params initParams_;
+    OrbExtractor orb_, initOrb_;
     Pinhole cam_;
     Vocabulary voc_;
     bool vocOk_ = false;
@@ -772,6 +839,7 @@ private:
     std::string dbg_;
     bool mapChanged_ = false;
     int loops_ = 0;
+    int lastReobsLoopKf_ = -1000000;
 };
 
 }  // namespace

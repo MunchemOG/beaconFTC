@@ -40,8 +40,8 @@ struct PosePrior {
 int optimizePose(Frame& F, const Map& map, const Pinhole& cam, const PosePrior& prior = PosePrior());
 
 struct OdomEdgeParams {
-    double sigmaTBase = 0.003, sigmaTPerM = 0.01;     // m
-    double sigmaRBase = 0.004, sigmaRPerRad = 0.01;   // rad
+    double sigmaTBase = 0.001, sigmaTPerM = 0.004;    // m (Pinpoint: about 0.5 % of distance)
+    double sigmaRBase = 0.002, sigmaRPerRad = 0.005;  // rad
 };
 
 /**

@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "features.h"
+#include "orb_features.h"
 #include "matcher.h"
 
 namespace beacon {

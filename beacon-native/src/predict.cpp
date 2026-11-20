@@ -98,6 +98,12 @@ size_t OdomBuffer::size() const {
     std::lock_guard<std::mutex> lock(mu_);
     return count_;
 }
+void OdomBuffer::clear() {
+    std::lock_guard<std::mutex> lock(mu_);
+    head_ = 0;
+    count_ = 0;
+}
+
 void OdomBuffer::dropOlderThan(int64_t t) {
     std::lock_guard<std::mutex> lock(mu_);
     while (count_ > 2 && get(1).tNs < t) {

@@ -292,6 +292,56 @@ int Matcher::searchByBoW(KeyFrame* k1, KeyFrame* k2, std::vector<int>& out) cons
     return n;
 }
 
+int Matcher::searchBruteForce(KeyFrame* k1, KeyFrame* k2, std::vector<int>& out) const {
+    out.assign(k1->f.size(), -1);
+    std::vector<int> idx2;
+    for (size_t b = 0; b < k2->mps.size(); ++b) {
+        MapPoint* p = map_.mp(k2->mps[b]);
+        if (p && !p->bad) idx2.push_back((int)b);
+    }
+    std::vector<int> bestFor2(k2->f.size(), 256), owner2(k2->f.size(), -1);
+    for (size_t a = 0; a < k1->mps.size(); ++a) {
+        MapPoint* p = map_.mp(k1->mps[a]);
+        if (!p || p->bad) continue;
+        const uint8_t* d1 = k1->f.desc.ptr<uint8_t>((int)a);
+        int best = 256, second = 256, bestIdx = -1;
+        for (int b : idx2) {
+            int d = orbDistance(d1, k2->f.desc.ptr<uint8_t>(b));
+            if (d < best) {
+                second = best;
+                best = d;
+                bestIdx = b;
+            } else if (d < second) {
+                second = d;
+            }
+        }
+        if (best < kLow && best < 0.8f * second && best < bestFor2[bestIdx]) {
+            if (owner2[bestIdx] >= 0) out[owner2[bestIdx]] = -1;  // keep the better of two claims
+            bestFor2[bestIdx] = best;
+            owner2[bestIdx] = (int)a;
+            out[a] = k2->mps[bestIdx];
+        }
+    }
+    std::vector<float> rot;
+    std::vector<int> idx;
+    for (size_t a = 0; a < out.size(); ++a) {
+        if (out[a] < 0) continue;
+        int b = map_.mp(out[a])->obs.count(k2->id) ? map_.mp(out[a])->obs.at(k2->id) : -1;
+        if (b < 0) {
+            out[a] = -1;
+            continue;
+        }
+        rot.push_back(k1->f.kps[a].angle - k2->f.kps[b].angle);
+        idx.push_back((int)a);
+    }
+    std::vector<int> rej;
+    rotationConsistency(rot, idx, rej);
+    for (int a : rej) out[a] = -1;
+    int n = 0;
+    for (int m : out) n += m >= 0;
+    return n;
+}
+
 int Matcher::searchForInitialization(const Features& f1, const Features& f2, std::vector<cv::Point2f>& prev,
                                      std::vector<int>& m12, int window) const {
     m12.assign(f1.size(), -1);

@@ -28,7 +28,7 @@ struct RenderOptions {
     double noiseSigma = 1.5;    // gray levels
     int supersample = 2;        // per axis
     double bottomBandM = 0.025; // opaque strip at the bottom of each wall
-    double postHalfWidthM = 0.02;
+    double postHalfWidthM = 0.004;  // 8 mm dark joint, as in beacon-field and tools/sim
     std::vector<Box> clutter;
 };
 

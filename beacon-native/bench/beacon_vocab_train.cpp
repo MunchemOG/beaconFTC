@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "dataset.h"
-#include "features.h"
+#include "orb_features.h"
 #include "vocab.h"
 
 using namespace beacon;

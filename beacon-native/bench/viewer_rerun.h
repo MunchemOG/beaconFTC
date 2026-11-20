@@ -29,6 +29,7 @@ struct ViewerOptions {
     bool worldZUp = true;         // false: explore mode without odometry (map = first camera, y down)
     int imageEvery = 1;           // log every Nth image (keeps .rrd files small)
     int jpegQuality = 80;
+    bool onlyLast = false;        // log just the final state at flush() (screenshots, small files)
 };
 
 /** The entity paths of the C6 table, for tests. */
@@ -45,6 +46,9 @@ public:
 
 private:
     void logStatic(const VizFrame& v);
+    void logNow(const VizFrame& v);
+    VizFrame last_;
+    bool hasLast_ = false;
     std::unique_ptr<rerun::RecordingStream> rec_;
     ViewerOptions opt_;
     int frames_ = 0;

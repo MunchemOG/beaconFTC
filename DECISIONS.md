@@ -394,3 +394,212 @@ own implementation; no ASTRO source code is copied into this repo. Dependencies 
   33.2 / 29.7 / 32.6 / 29.6 / 47.9 cm (all fail).
 - Shared runs for the native engineer live in tools/sim/runs/ (gitignored): hard-match-s1..s5 (30 fps) and
   hard-session-s1 (10 fps, to fit the disk: 14 GB free when generated).
+
+## 2026-11-17 java-hub-engineer: Native bridge (J2) and desktop fusion replay (J4)
+- JNI: `TeamCode/src/main/cpp/CMakeLists.txt` add_subdirectory()s `beacon-native/` and builds `libbeacon.so`
+  (their `beacon` target) plus `libbeacon_jni.so` (our shim, NEEDED libbeacon.so). Gradle (TeamCode/build.gradle):
+  ndkVersion 27.0.12077973, CMake 3.22.1, `abiFilters 'arm64-v8a'` (beacon-native's OpenCV/Ceres exist for arm64 only),
+  `-DANDROID_STL=c++_static`, `-DCMAKE_BUILD_TYPE=Release` also for debug APKs (an -O0 core would be too slow).
+  Java: `vision/BeaconCore` (I3 one call for one call), `vision/NativeBeacon` (System.loadLibrary("beacon_jni"); a
+  failed load is a state, every call becomes a no-op), `vision/VisionFixSource` (FieldFixSource).
+- Workaround in OUR CMakeLists (fix requested from native): `beacon-native/src/features.h` shadows bionic's system
+  `<features.h>` (included by libc++ `__config`) because beacon_core puts `src/` on the -I path; every NDK compile of
+  the core fails. We strip `beacon-native/src` from beacon_core/beacon (INTERFACE_)INCLUDE_DIRECTORIES and add it
+  back with `-iquote` (beacon-native includes its headers with quotes only). Remove once the header is renamed.
+- VisionFixSource feeds odometry from its own thread by polling the Pinpoint source's volatile latest() every
+  `vision.odomPollMs` (2 ms), so `update()` is unchanged; frames go in from the frame source's decode thread
+  (listener). Start pose: sent automatically from the localizer's published pose whenever it reflects a new setPose
+  (new `getPoseSetPoseCount()`, read before the pose) and again after a Pinpoint world-epoch change. Fixes with the
+  bench-only NO_ODOM bit or non-finite values are dropped (counted). beacon_destroy runs under a write lock;
+  every other call holds the read lock (the frame push only tryLock()s, never blocks the decode thread).
+- beacon.json `vision` section: `enabled`, `fieldFile` (/sdcard/FIRST/beacon/field.json), `cameraFile`
+  (/sdcard/FIRST/beacon/camera.json, I2 format from a checkerboard calibration; REQUIRED, vision stays off with a
+  reason if missing - we do not run the core on nominal intrinsics), `paramsFile`, `odomPollMs`. beacon.json
+  T_robot_cam is the one mount; camera.json's mount is ignored.
+- BeaconRig now owns LimelightFrameSource + VisionFixSource (when `useLimelight` and `vision.enabled`); without the
+  native library it adds a problems line and runs on the Pinpoint alone (the frame stream is not started then).
+  Telemetry: Vision line, Camera line (fps, decode ms + decode-thread CPU, latency and its source), Fixes line
+  (applied/s, last correction size mm/deg). New localizer getters getLastCorrectionM/Rad.
+- J4 `ReplayFusion` (test source): odom.csv row = one update(), localizer clock = replay time, start pose declared
+  before the first row, a fix becomes visible `fixDelayMs` (default 50) after its capture time, latest wins. CLI via
+  `-Pbeacon.replay.run=DIR [-Pbeacon.replay.fixes|out|fixDelayMs|config=...]` (forwarded in TeamCode/build.gradle).
+- FINDING (measured, one 10 s synthetic run, not a gate): native match10 fixes (sigma ~1.2 cm) fused with the
+  default fix gating/priors: 70/143 applied, 72 rejected by the 0.35 rad/s turn gate (inherited AprilTag default);
+  fused vs truth max 19.1 mm rms 11.4 mm final 3.2 mm, odometry alone max 13.6 mm rms 8.5 mm final 13.6 mm. The
+  defaults `fix.priorSigmaXYM` 0.02 and `maxOmegaRadPs` 0.35 need tuning on longer bench runs (C4/C5 gates).
+
+## 2026-11-18 native-core: beacon-native dependencies and optimizer
+- OpenCV 4.12.0 minimal static (core, imgproc, features2d, flann, calib3d; host adds imgcodecs, highgui),
+  Eigen 3.4.0, Ceres 2.2.0 (miniglog, no SuiteSparse/LAPACK, Eigen sparse), nlohmann/json 3.11.3,
+  GoogleTest 1.15.2 (Catch2 rejected: Boost licence is not BSD/MIT/Apache). All pinned in VERSIONS.md.
+- Ceres (builder's call per design §8) for local BA, Sim(3) pose graph and Sim(3) loop refinement; the
+  motion-only pose refinement and the field-mode planar edge solve are our own Gauss-Newton (Eigen),
+  because they run every frame. Ceres runs single-threaded so replays are deterministic.
+- ORB: our own detection (FAST per 30 px cell per pyramid level, intensity-centroid orientation, ORB-SLAM's
+  per-level quota) with OpenCV's rotated-BRIEF descriptors. cv::ORB alone clustered features and broke
+  tracking on EuRoC.
+- Place recognition: our own k-majority vocabulary tree (k=10, L=4, TF-IDF, L1 score) and keyframe database.
+  No DBoW2 code, no ORB-SLAM vocabulary. The bench vocabulary is trained on EuRoC V1_01 (tested on MH_01);
+  it is a build artefact (bench/vocab/, gitignored). For the robot, train on practice-field recordings.
+
+## 2026-11-18 native-core: I3 additions (no signature changes)
+- `BEACON_FIX_NO_ODOM = 8` kind bit: fix made in the bench-only no-odometry mode (never on the robot).
+- `BEACON_STATUS_*` constants equal to BeaconStatus (0 INVALID, 1 INITIALIZING, 2 TRACKING, 3 LOST =
+  vision degraded, pose is pure Pinpoint).
+- `void beacon_reset_odom_world(beacon_ctx*, int64_t t_ns)` (Java engineer's request): Pinpoint reboot. Field
+  mode re-anchors the new odometry world at the core's last field pose with start-pose sigmas; explore mode
+  starts a new odometry segment (no odometry factors across it).
+- params_json keys `mode` ("field" | "explore"; field_json may be NULL in explore mode) and `synchronous`
+  (bench-only deterministic replay). Unknown keys are an error. Threading rules documented in beacon.h.
+- Explore-mode fixes are in the map frame (odometry world with odometry; arbitrary frame without), not the
+  field frame; they are for the bench and the viewer only.
+- `src/features.h` renamed `src/orb_features.h` and `src/` made a private include directory: it shadowed
+  bionic's <features.h> in the JNI build.
+
+## 2026-11-18 native-core: field-model interpretation (beacon-field/biobuzz-2026.json)
+- `walls[].railHeightM` = vertical size of the top rail (README of beacon-field); model edges: wall-floor line,
+  wall top, top-rail bottom (heightM - railHeightM), bottom-rail top (bottomRailTopM), posts (vertical).
+- Hive: only `part = frame` edges anchor fixes; `hive_red` / `hive_blue` tip during a match and are ignored
+  until their tilt is estimated (not done yet). Keyhole `rib` faces are not used for occlusion (non-convex).
+- Edge samples are capped per model edge (`edgeMaxSamplesPerEdge`, 80): a long hive leg next to the camera
+  otherwise outvoted the walls and produced confident 15 cm-wrong fixes (hard-match-s1, t = 83 s).
+- A poorly known prediction (typed start pose, after a blind stretch) is solved from 45 pose hypotheses
+  (`wideSearchSigma*`): from a 5 cm / 3 deg wrong start the single local solve converged 21 cm off.
+
+## 2026-11-18 java-hub-engineer: Round 2 - clean native link, odom-world reset, field-mode guard, off-thread destroy
+- Link: kept add_subdirectory(beacon-native) in TeamCode/src/main/cpp/CMakeLists.txt (not the prebuilt
+  build-android/libbeacon.so): the APK is always built from the checked-out core source, with no separate native
+  build step that could go stale. The features.h include-path workaround is REMOVED (upstream renamed it
+  orb_features.h and made src/ private); the shim sees only beacon-native/include.
+- Pinpoint reboot: VisionFixSource's feeder thread (the only thread that pushes odometry) calls
+  beacon_reset_odom_world(t) at the first sample of the new world epoch, before pushing that sample. The start pose
+  is NO LONGER re-sent after a reboot (the core re-anchors itself); it is sent only for setPose calls.
+- Field mode only: a vision.paramsFile whose "mode" is anything but "field" (e.g. "explore", map-frame poses) keeps
+  vision OFF with a telemetry reason; fixes with BEACON_FIX_NO_ODOM (8) are still dropped. BeaconCore gained
+  STATUS_* constants equal to BEACON_STATUS_* / BeaconStatus.
+- beacon_destroy waits for the in-flight frame, so VisionFixSource.stop() never destroys on the caller's thread:
+  it stops calls at once (coreRunning = false, listener cleared) and a "BeaconVisionStop" thread joins the feeder and
+  destroys under the write lock. stop() returns in < 50 ms (tested with a 300 ms destroy); a following start()
+  waits on its feeder thread for the old core to be destroyed before creating a new one. awaitStopped(ms) added.
+
+## 2026-11-18 native-core: round 2 (loop closing, explore+odometry, field-mode window)
+- MH_01 root cause: no BoW/Sim(3) loop fired because (1) the late keyframes already share map points with
+  keyframe 0 (tracking re-observes the start area), so the start area is excluded from loop candidates by design,
+  and (2) the remaining candidates share at most 16 descriptor matches, even with brute force (k-node BoW matching
+  recovered only ~25 % of truly shared points between covisible keyframes). Lowering the BoW node level made
+  tracking worse (ATE 1.19 m) and is reverted.
+- Added: (a) "re-observation loops": a new keyframe sharing >= 20 points with a keyframe >= 100 keyframes and 20 s
+  older is logged as a loop closure (viewer `beacon/loop_closures`) and followed by a 30-iteration global BA;
+  (b) loop Sim(3) hypotheses with |log scale| > 0.2 are rejected (degenerate fits had scale 0.04);
+  (c) loop verification matches by brute force over features with map points. Measured: V1_01 (vocabulary from
+  MH_01) ATE 1.28 -> 0.079 m; MH_01 (vocabulary from V1_01) 12 loops but ATE 0.096 -> 0.158 m. Kept on (team
+  wants the loops; V1_01 needs the global BA); the MH_01 regression is open.
+- explore+odometry: odometry factor sigmas tightened to Pinpoint-like values (1 mm + 0.4 %/m, 0.002 rad +
+  0.5 %/rad). With exact odometry the map scale error is +0.17 %; with the simulated 0.5 % odometry scale error it
+  follows the odometry (-1.28 % vs odometry -0.94 %). Vision alone pulls the scale about -2 % on the bench renderer
+  (cause not found). Test metric changed to the median ratio of distances (>= 0.5 m) because a Sim(3) fit over a
+  2 m trajectory is noise-dominated.
+- Field mode: edges solved over a sliding window of 6 frames (>= 0.15 s apart) sharing one odometry->field
+  alignment; edge polarity (black rails); <= 80 samples per model edge; wide 45-hypothesis search only when the
+  window holds >= 0.25 m or 0.35 rad of motion (a still view picked the wrong of two equally good poses on s2, s3),
+  ambiguity test; re-lock (widen the prediction) after 8 consecutive prediction-disagreement rejections
+  (odometry slips/heading jumps); published sigmas floored at 1.5 cm / 0.01 rad.
+- Gate note for the Field engineer / orchestrator: the `hard` profile's start error (5 cm) equals the Stage 1 limit
+  (< 5 cm at every sample), so a run fails at t = 0 unless vision refines the start pose while the robot is still;
+  from a single still view that refinement is ambiguous in 2 of 5 runs.
+
+## 2026-11-18 orchestrator: Round 3 calls - realistic start error, Java fix gates, field mode first
+- Hard profile start error 5 cm / 3 deg equalled the Stage 1 limit, so every run failed at t = 0. A team
+  places the robot against the wall at its start; 5 cm / 3 deg is not a realistic typed-start error. Hard
+  profile default start error becomes 2 cm / 1 deg; the Stage 1 gate stays "< 5 cm at every sample up to
+  150 s". `--start-error-*` stays available for stress runs (not gated).
+- BeaconLocalizer fix speed/turn gates (0.75 m/s, 0.35 rad/s) came from the AprilTag code and reject
+  most vision fixes (s5: 957 rejected at 1.07 rad/s). Fixes are capture-time stamped and the core gates
+  at 2.0 m/s / 1.5 rad/s, so the Java defaults move to 2.0 m/s / 1.5 rad/s (configurable).
+- Round 3 priority is field-mode accuracy (C3 points, seams, re-verification, hive tilt) to pass fused
+  Stage 1 on all 5 hard runs. Explore mode is good enough for the Mac demo (99.4 % tracking, 12 loops on
+  MH_01, ATE 0.158 m); its ATE/scale targets are deferred to a later round.
+
+## 2026-11-18 field-tools-engineer: Hard profile start error 2 cm / 1 deg (orchestrator "Round 3 calls")
+- odomsim.PROFILE_START_ERROR["hard"] = (2.0, 1.0) (was 5 cm / 3 deg, which equals the Stage 1 limit at t = 0).
+  --start-error-cm/--start-error-deg still override. Typed-start computation moved into make_dataset.typed_start_pose();
+  its seeded direction/sign do not depend on the size.
+- tools/sim/runs/hard-match-s1..s5 and hard-session-s1: only start.csv and meta.json rewritten (tools/sim/rewrite_start.py,
+  meta.json gets startErrorCmDeg [2.0, 1.0] plus a startRewrites record); frames, odom, truth untouched. Each start.csv
+  is byte-identical to a fresh make_dataset.py run with the same seed.
+- Odometry-only, rewritten runs: error 0.02 m at t = 0; all 5 matches still fail stage1 (first >= 5 cm at 13-90 s;
+  max 0.31-0.48 m); session fails stage2 (max 0.82 m).
+- CORRECTION to the entry above (its odometry-only numbers were written before the measurement finished): measured on
+  the rewritten runs, odometry-only error is 0.0200 m at t = 0; matches s1..s5 first reach >= 5 cm at 44.40 / 4.96 /
+  14.12 / 6.70 / 11.42 s, max 0.1948 / 0.2096 / 0.3066 / 0.1646 / 0.3322 m (all fail stage1); session max 0.7924 m,
+  9.64 deg (fails stage2).
+
+## 2026-11-18 java-hub-engineer: Fix motion gates default to the core's (2.0 m/s, 1.5 rad/s)
+- `fix.maxSpeedMps` 0.75 -> 2.0 and `fix.maxOmegaRadPs` 0.35 -> 1.5 (still configurable). The old values came from
+  the AprilTag path (latency-prone MegaTag results); vision fixes are capture-time stamped and the core already gates
+  at 2.0 m/s / 1.5 rad/s. On hard-match-s1..s5 rejected fixes per run drop from 862-968 to 2.
+- MEASURED (fused_gate.sh stage1, same core fixes for both columns, start.csv = 2 cm / 1 deg start error written
+  2026-11-18 08:58:01): max position error 0.080/0.114/0.081/0.097/0.178 m (new) vs 0.080/0.114/0.106/0.101/0.184 m
+  (old); all five still FAIL stage1 (< 0.05 m). The binding limit is the fixes themselves: fix error vs truth rms
+  26-54 mm, max 73-174 mm, with sigma_xy ~15 mm claimed (over-confident), so the localizer follows them. Not a
+  Java-side gating problem any more; flagged to the native core.
+
+## 2026-11-18 native-core: round 3 (field mode accuracy) - what changed and what each step measured
+Fused Stage 1 (fused_gate.sh, hard-match s1..s5, start error 2 cm / 1 deg, Java gates 2.0 m/s / 1.5 rad/s), max / RMS cm:
+- r3_a baseline (6-frame window, hive tilt):            8.0/11.4/8.2/10.8/17.8  | 2.7/4.3/3.5/3.3/5.4
+- r3_b + re-verification every 2 s + sigma calibration:   8.0/11.4/8.3/7.3/11.0   | 2.6/3.3/3.4/2.5/4.2
+- r3_c 2-frame windows (+ tile seams):                    6.2/9.3/7.5/5.0/8.2     | 1.3/2.8/2.2/1.5/1.9 (s4 PASS)
+- r3_d + panel joints as thin dark lines, sigma refit:    5.6/9.5/7.8/4.9/9.6     | 1.2/1.9/2.1/1.4/2.4 (s4 PASS)
+- Window length: odometry scale error (hard: +-1.5 %) makes frames > 0.3 s apart disagree by cm; tracking and the
+  wide search now tie only the newest 2 frames (6 frames: raw p90 3.9-7.9 cm; 2 frames: 1.2-3.5 cm).
+- Hive tilt: two-state estimate per hive part from edge support (validated against hive.csv on s1: blue tipped to
+  state 0 detected at ~71 s, truth 59.5 s; cells are rarely in view from a 0.30 m camera, so the effect is small).
+- Panel joints (posts) are matched as thin dark lines, not step edges: a venue box edge behind a clear panel
+  stood in for a joint and moved fixes 8 cm along the wall (s2, 15.4 s); fixed.
+- Tile seams: thin dark lines, weight 0.5, within 2 m. Seams on vs off (raw fixes, 6-frame window): medians
+  1.7/1.6/1.3/1.8/2.3 -> 1.6/1.4/1.2/1.6/1.5 cm, p90 about equal, s3 max 7.9 -> 11.1. Kept on (small gain).
+- Published sigma: calibrated on the hard runs (fit per q bin: q = residual RMS px / inlier ratio^2;
+  sigma = 0.0055 m * q + 0.006 m * max(0, q - 2.4)^2, floor 0.8 cm). Note it is fit on the runs it is scored on.
+- Not done in round 3: C3 surface-constrained ORB points in field mode; start refinement during INIT stillness
+  (start error is now 2 cm, inside the gate); the hard session stage 2 run.
+
+## 2026-11-18 orchestrator: Deleted parked OpenVINS harness data and EuRoC V1_01 (team approved)
+Freed disk (was ~8 GB free). Removed desktop-harness/build, desktop-harness/third_party (OpenVINS
+source), desktop-harness/runs and desktop-harness/data/euroc/V1_01_easy. Kept MH_01_easy (explore-mode
+test) and the trained vocabularies in beacon-native/bench/vocab/. The OpenVINS harness (spec 01) can be
+rebuilt with desktop-harness/setup.sh; V1_01 re-downloaded with desktop-harness/data/get_euroc.sh.
+
+## 2026-11-18 native-core: round 4 (wrong locks, Hub time budget, held-out check)
+Fused Stage 1 (fused_gate.sh), max / RMS cm, s1..s5:
+- r3_d (round 3 end):                                   5.6/9.5/7.8/4.9/9.6    | 1.2/1.9/2.1/1.4/2.4  (s4 PASS)
+- r4_a incremental (frame-budgeted) search:             6.2/8.6/24.5/4.9/14.5  | 1.6/2.1/5.7/1.8/3.1  (more fix gaps)
+- r4_b + calibrated sigma in gate/alignment, part check, 2-level re-lock, still re-lock:
+                                                        4.2/6.8/18.9/6.3/10.5  | 1.2/1.6/5.9/1.9/2.5  (s1 PASS)
+- final (r4_b + deterministic search budget in replays, 3 solves/frame):
+                                                        4.2/6.9/12.7/6.1/11.6  | 1.2/1.5/4.2/1.6/2.7  (s1 PASS)
+- Held-out (never tuned on), final settings: heldout s6/s7/s8 max 7.0/8.3/7.3, RMS 1.6/1.8/1.4 cm: all FAIL, in line
+  with s1-s5 (no sign of over-fitting the sigma model).
+- hard-session-s1 Stage 2, final settings: max 27.7 cm (one wrong lock at 434 s), RMS 2.4 cm, heading max 4.4 deg: FAIL.
+Changes and measurements:
+- Odometry scale estimation (per-axis, from fix pairs): estimates the right direction (s2 truth 1/0.988 -> 1.017) but
+  no accuracy gain with 2-frame windows and worse on s2/s5 (max 10.5/19.6 cm); 4-frame windows with it are still worse
+  than 2 frames. Kept in code, off by default.
+- Calibrated sigma now replaces the edge covariance in the gate, the chi-square test and the core's own alignment
+  update (before, weak 55-inlier fixes with true 28 cm error dragged the alignment because their edge covariance was
+  tiny).
+- Part-consistency check: a model part (a wall, the hive frame) with >= 30 samples and < 20 % inliers blocks the fix and
+  forces a lock re-check; these rejections count toward re-locking (mild widening after 8, wide search after 24).
+- Standing still with an uncertain prediction: local re-lock instead of waiting for motion, accepted only with >= 150
+  inliers and sigma <= 1.5 cm (s3 35 cm -> 10 cm raw).
+- C3 (surface-constrained ORB points in field mode): not done in round 4.
+- Hub time budget: wide searches and lock re-checks run at most 3 hypothesis solves per frame and, on the robot, stop
+  after 8 ms (wall clock); replays use the solve count only so results are deterministic (the wall-clock budget made
+  a session replay differ between runs: a 340 s fix blackout in one run, none in the next). Mac, synchronous, s1:
+  p50 6.1 ms, p99 62 ms, max 117 ms per frame (lock re-checks off: p50 4.6, p99 18, max 60 ms).
+
+## 2026-11-18 field-tools-engineer: Nominal-odometry variants of the hard runs (round 5)
+- make_dataset.py --no-render (writes every file except frame PNGs) and tools/sim/make_odom_variant.py: re-runs
+  make_dataset with the source run's meta.json args, a different --odom-profile and --no-render, symlinks frames/ to the
+  source's frames, and refuses (exit 2, removes the output) unless frames.csv, camera.json, field.json, truth.csv and
+  hive.csv are byte-identical to the source's. Start error comes from the new profile (nominal: exact start).
+- tools/sim/runs/nominal-match-s1..s8 (from hard-match-s1..s5 and heldout-match-s6..s8), about 3.5 MB each.

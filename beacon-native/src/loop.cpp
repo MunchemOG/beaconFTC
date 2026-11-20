@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <random>
 
 namespace beacon {
@@ -57,6 +58,8 @@ bool LoopCloser::process(KeyFrame* kf) {
 
 bool LoopCloser::detect(KeyFrame* kf, std::vector<KeyFrame*>& out) {
     if (voc_.empty() || map_.numKeyFrames() < 12 || kf->id < lastLoopKf_ + 10) return false;
+    if (const char* m = std::getenv("BEACON_MAX_LOOPS"))
+        if ((int)map_.loopLinks.size() >= std::atoi(m)) return false;
     std::vector<int> exclude = {kf->id};
     double minScore = 1.0;
     for (int id : kf->ordered) {
@@ -71,6 +74,27 @@ bool LoopCloser::detect(KeyFrame* kf, std::vector<KeyFrame*>& out) {
     std::map<int, const BowVector*> bows;
     for (KeyFrame* k : map_.keyFrames()) bows[k->id] = &k->bow;
     auto scored = map_.db.query(kf->bow, exclude, std::max(minScore, 0.01), bows);
+    debug = "kf " + std::to_string(kf->id) + " minScore " + std::to_string(minScore).substr(0, 5) + " cands " +
+            std::to_string(scored.size());
+    if (std::getenv("BEACON_LOOP_DEBUG") && !kf->ordered.empty()) {
+        Matcher mm(map_, cam_);
+        std::vector<int> m12;
+        KeyFrame* nb = map_.kf(kf->ordered[0]);
+        int pts = 0;
+        for (int id : kf->mps) pts += id >= 0;
+        debug += " [covis kf" + std::to_string(nb->id) + " w" + std::to_string(kf->conn[nb->id]) + " bow " +
+                 std::to_string(mm.searchByBoW(kf, nb, m12)) + " pts " + std::to_string(pts) + " words " +
+                 std::to_string(kf->bow.size()) + " nodes " + std::to_string(kf->fv.size()) + " minConnId " +
+                 std::to_string(*std::min_element(kf->ordered.begin(), kf->ordered.end())) + "]";
+        int oldest = *std::min_element(kf->ordered.begin(), kf->ordered.end());
+        KeyFrame* ok = map_.kf(oldest);
+        if (ok && kf->id - oldest > 100) {
+            std::vector<int> mo;
+            debug += " [oldest kf" + std::to_string(oldest) + " w" + std::to_string(kf->conn[oldest]) + " bow " +
+                     std::to_string(mm.searchByBoW(kf, ok, mo)) + " score " +
+                     std::to_string(Vocabulary::score(kf->bow, ok->bow)).substr(0, 5) + "]";
+        }
+    }
     // Group each candidate with its covisible keyframes; keep the best of each strong group.
     std::vector<std::pair<double, KeyFrame*>> groupsBest;
     double bestAcc = 0;
@@ -121,6 +145,7 @@ bool LoopCloser::detect(KeyFrame* kf, std::vector<KeyFrame*>& out) {
         next.push_back(g);
     }
     groups_ = next;
+    debug += " consistent " + std::to_string(out.size());
     return !out.empty();
 }
 
@@ -130,7 +155,8 @@ bool LoopCloser::computeSim3(KeyFrame* kf, const std::vector<KeyFrame*>& cands) 
     for (KeyFrame* c : cands) {
         if (c->bad) continue;
         std::vector<int> m12;
-        int nm = matcher.searchByBoW(kf, c, m12);
+        int nm = matcher.searchBruteForce(kf, c, m12);
+        debug += " | c" + std::to_string(c->id) + " bf " + std::to_string(nm);
         if (nm < 20) continue;
         // 3-D points in each camera.
         std::vector<int> idx1;
@@ -155,7 +181,9 @@ bool LoopCloser::computeSim3(KeyFrame* kf, const std::vector<KeyFrame*>& cands) 
             size_t a = pick(rng), b = pick(rng), d = pick(rng);
             if (a == b || b == d || a == d) continue;
             Sim3 S = umeyamaSim3({P2[a], P2[b], P2[d]}, {P1[a], P1[b], P1[d]}, fixedScale_);
-            if (!std::isfinite(S.s) || S.s <= 0) continue;
+            // Monocular scale drift between a keyframe and its loop partner is far below 2x;
+            // tiny or huge scales are degenerate fits (points collapsed onto one spot).
+            if (!std::isfinite(S.s) || std::abs(std::log(S.s)) > maxLogScale_) continue;
             Sim3 Si = S.inverse();
             int in = 0;
             for (size_t k = 0; k < P1.size(); ++k) {
@@ -170,8 +198,11 @@ bool LoopCloser::computeSim3(KeyFrame* kf, const std::vector<KeyFrame*>& cands) 
                 best = S;
             }
         }
+        debug += " ransac " + std::to_string(bestIn) + " (s " + std::to_string(best.s).substr(0, 5) + ")";
         if (bestIn < 20) continue;
         int in = optimizeSim3(kf, c, m12, best, cam_, map_, 10.0, fixedScale_);
+        if (std::abs(std::log(best.s)) > maxLogScale_) continue;
+        debug += " opt " + std::to_string(in) + " (s " + std::to_string(best.s).substr(0, 5) + ")";
         if (in < 20) continue;
         // Accept: S_cw = S_cm * S_mw.
         matched_ = c;
@@ -190,10 +221,25 @@ bool LoopCloser::computeSim3(KeyFrame* kf, const std::vector<KeyFrame*>& cands) 
         int total = 0;
         for (int m : curMatched_)
             if (m >= 0) ++total;
-        if (total >= 40) {
-            char buf[160];
-            std::snprintf(buf, sizeof buf, "loop: keyframe %d <-> %d, %d matches, scale %.3f", kf->id, c->id, total,
-                          scw_.s / Sim3(kf->tcw).s);
+        debug += " total " + std::to_string(total);
+        // Plausibility: a loop corrects accumulated drift, so the correction must be small
+        // compared with the path travelled since the loop keyframe (monocular drift is a few %).
+        double path = 0;
+        KeyFrame* prev = nullptr;
+        for (KeyFrame* k : map_.keyFrames()) {
+            if (k->id < c->id || k->id > kf->id) continue;
+            if (prev) path += (k->centre() - prev->centre()).norm();
+            prev = k;
+        }
+        Vec3 cOld = kf->centre(), cNew = scw_.inverse().map(Vec3::Zero());
+        double shift = (cNew - cOld).norm();
+        bool plausible = std::abs(std::log(scw_.s)) <= maxLogScale_;
+        debug += " total " + std::to_string(total) + " shift " + std::to_string(shift).substr(0, 6) + "/path " +
+                 std::to_string(path).substr(0, 6) + (plausible ? " ok" : " implausible");
+        if (total >= 40 && plausible) {
+            char buf[256];
+            std::snprintf(buf, sizeof buf, "loop: keyframe %d (t %lld) <-> %d (t %lld), %d matches, scale %.3f, shift %.3f",
+                          kf->id, (long long)kf->tNs, c->id, (long long)c->tNs, total, scw_.s, (cNew - cOld).norm());
             lastMessage = buf;
             return true;
         }

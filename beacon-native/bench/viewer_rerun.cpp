@@ -162,6 +162,29 @@ void RerunViewer::logStatic(const VizFrame& v) {
 
 void RerunViewer::log(const VizFrame& v) {
     if (!rec_) return;
+    if (opt_.onlyLast) {
+        // Keep the newest frame, with the newest map snapshot.
+        VizFrame keep = v;
+        keep.image = v.image.clone();
+        if (!v.mapChanged && hasLast_) {
+            keep.mapChanged = last_.mapChanged;
+            keep.keyframes = last_.keyframes;
+            keep.mapPoints = last_.mapPoints;
+            keep.localPoints = last_.localPoints;
+            keep.backendPoints = last_.backendPoints;
+            keep.loopLinks = last_.loopLinks;
+            keep.graphEdges = last_.graphEdges;
+            keep.trajectory = last_.trajectory;
+            keep.modelEdges = last_.modelEdges.empty() ? v.modelEdges : last_.modelEdges;
+        }
+        last_ = keep;
+        hasLast_ = true;
+        return;
+    }
+    logNow(v);
+}
+
+void RerunViewer::logNow(const VizFrame& v) {
     const rerun::RecordingStream& r = *rec_;
     if (!staticDone_) {
         logStatic(v);
@@ -200,8 +223,8 @@ void RerunViewer::log(const VizFrame& v) {
         r.log("beacon/world/tf", axes({v.tWorldCam, robot}, (float)(2 * scale)));
     }
     r.log("beacon/points", points(v.trackedPoints, rerun::Color(0, 220, 0), 2.0f));
-    if (v.odomValid)
-        r.log("beacon/pose_imu", axes({v.tWorldCamOdom}, (float)(2 * scale)));
+    // Pinpoint/odometry camera pose; logged empty without odometry so the display always exists.
+    r.log("beacon/pose_imu", axes(v.odomValid ? std::vector<SE3>{v.tWorldCamOdom} : std::vector<SE3>{}, (float)(2 * scale)));
     if (v.mapChanged) {
         std::vector<rerun::LineStrip3D> traj;
         std::vector<rerun::encodings::Vec3D> pts;
@@ -221,6 +244,11 @@ void RerunViewer::log(const VizFrame& v) {
 }
 
 void RerunViewer::flush() {
+    if (rec_ && opt_.onlyLast && hasLast_) {
+        hasLast_ = false;
+        last_.mapChanged = true;
+        logNow(last_);
+    }
     if (rec_) (void)rec_->flush_blocking(10.0f);
 }
 

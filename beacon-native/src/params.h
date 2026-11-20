@@ -26,9 +26,16 @@ struct Params {
     double startSigmaHeading = 0.10;    // rad
     double driftPerMetre = 0.01;        // alignment random walk, m per m travelled
     double driftHeadingPerRad = 0.005;  // rad per rad turned
-    double driftHeadingPerS = 0.0005;   // rad per s (IMU drift)
+    double driftHeadingPerS = 0.0006;   // rad per s (IMU drift, about 2 deg/min)
 
     // Bench only, no odometry pushed at all: constant-velocity prediction from past fixes.
+    // Online odometry scale estimate (per robot axis) from pairs of accepted fixes.
+    bool odomScaleEstimate = false;   // measured: no gain with 2-frame windows, worse on s2/s5 (round 4)
+    double odomScaleMinPathM = 0.3;   // pair fixes this much travel apart
+    double odomScaleMaxPairS = 3.0;
+    double odomScaleForget = 0.98;
+    double odomScaleMinInfo = 2.0;    // m^2 of accumulated travel per axis before trusting it
+
     double noOdomSigmaXY = 0.10;
     double noOdomSigmaHeading = 0.10;
 
@@ -48,6 +55,31 @@ struct Params {
     double edgeSigmaPx = 1.5;        // per-sample pixel noise used for the covariance
     double edgeCorrelationInflation = 3.0;  // samples along one edge are correlated
     double edgeMaxRangeM = 5.0;
+    int edgeMaxSamplesPerEdge = 80;
+    bool edgeUsePolarity = true;     // black rails: wall edges have a known dark side
+    double edgeSeamWeight = 0.5;     // tile seams (thin dark lines on the floor); 0 = off
+    double edgeSeamMaxRangeM = 2.0;
+    double edgeSeamMinContrast = 8.0;  // gray levels below the sides (seams and joints)
+    bool edgePostAsRidge = true;     // panel joints (posts) are thin dark lines
+    double postWidthM = 0.008;       // visible width of a joint
+    double seamWidthM = 0.004;
+    // Hive tilt (two stable states per hive): evidence = decay * evidence + gain * (support1 - support0).
+    double hiveStartEvidence = 3.0;
+    double hiveEvidenceDecay = 0.9;
+    double hiveEvidenceGain = 4.0;
+    double hiveDecide = 1.0;
+    int hiveMinSamples = 20;
+    double hiveSupportNeutral = 0.2;  // support fraction that is neither for nor against a tilt
+    double wideSearchSigmaXY = 0.04;      // m: above this, try many pose hypotheses
+    double wideSearchSigmaHeading = 0.03; // rad
+    double wideSearchPriorWeight = 1.0;   // inliers per unit of prior chi2 when ranking hypotheses
+    double wideAmbiguityMinInliers = 15;  // a different pose within this many inliers = ambiguous
+    double wideAmbiguityFraction = 0.05;  // ... or within this fraction of the best
+    int edgeWindowFrames = 2;             // frames tied by odometry when tracking (measured: 2 best)
+    int edgeWideWindowFrames = 2;         // frames for the wide search and re-verification (6 measured worse)
+    double wideMinSpreadM = 0.25;         // wide search needs this much travel in the window
+    double wideMinTurnRad = 0.35;         // ... or this much turning
+    double edgeWindowMinSpacingS = 0.15;  // keep window frames at least this far apart
 
     // Field mode: gate for publishing a fix (C4).
     double gateMaxOmegaRadS = 1.5;
@@ -57,6 +89,28 @@ struct Params {
     double gateMaxSigmaXY = 0.03;
     double gateMaxSigmaHeading = 0.03;
     double gateMaxChi2 = 16.0;       // Mahalanobis^2 of fix vs prediction (3 dof)
+    double fixSigmaFloorXY = 0.008;      // m, lower bound on published sigma_xy
+    double fixSigmaFloorHeading = 0.005; // rad
+    double fixSigmaPerQXY = 0.0055;      // m per unit of q = rms_px / inlier_ratio^2 (calibrated)
+    double fixSigmaPerQHeading = 0.004;  // rad per unit of q
+    double fixSigmaQuadratic = 0.006;    // m per unit^2 of q above the knee
+    double fixSigmaKneeQ = 2.4;
+    int relockAfterRejects = 8;
+    double relockCheckS = 2.0;       // re-verify the lock this often (0 = never)
+    double relockGridXY = 0.05;      // m, re-verification grid step
+    double relockGridHeading = 0.035; // rad
+    double relockMargin = 0.08;      // switch only for this many more inliers (fraction) + 10
+    int searchSolvesPerFrame = 3;    // at most this many hypothesis solves per frame (45 per search)
+    double searchBudgetMs = 8.0;     // ... and stop after this much time (measured on this machine)
+    int searchRescoreTop = 2;
+    int stillRelockMinInliers = 150;  // re-lock while standing still: stricter bar
+    double stillRelockMaxSigmaXY = 0.015;
+    int partMinSamples = 30;         // part-consistency check: parts with at least this many samples
+    double partMinInlierFrac = 0.2;  // ... must have this inlier fraction, else no fix + re-check (0 = off)        // distinct candidates re-scored when a search completes      // consecutive prediction-disagreement rejections before widening
+    double relockSigmaXY = 0.035;    // below the wide-search threshold: re-lock with a wider local search
+    double relockSigmaHeading = 0.025;
+    double relockWideSigmaXY = 0.06;   // after 3x relockAfterRejects: wide search
+    double relockWideSigmaHeading = 0.05;
 
     // Field mode: surface-constrained ORB map (C3).
     bool usePoints = true;
@@ -70,8 +124,10 @@ struct Params {
     bool exploreLoopClosing = true;
     int exploreLocalWindow = 10;     // covisible keyframes in local BA
     bool exploreGlobalBA = true;     // full BA after each loop closure (bench)
+    int exploreGlobalBAIterations = 30;
     int exploreMaxFramesBetweenKf = 20;
     int exploreMinFramesBetweenKf = 3;
+    int exploreReobsMinGapKf = 100;   // re-observation loop: keyframes this far apart in id
 
     /** Parses json (may be null/empty). Returns false and fills err on a bad document. */
     static bool parse(const char* json, Params& out, std::string& err);

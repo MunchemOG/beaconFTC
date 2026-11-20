@@ -30,8 +30,10 @@ import java.util.Set;
  *     "maxJumpM": 0.5,           // reject fixes further than this from our pose (metres)
  *     "maxJumpRad": 0.5,         // ... or this far off in heading (radians)
  *     "recoveryWindowS": 1.0,    // after a tracking loss, trust fixes fully this long
- *     "maxSpeedMps": 0.75,       // ignore fixes taken while the robot moved faster
- *     "maxOmegaRadPs": 0.35,     // ... or turned faster (rad/s)
+ *     "maxSpeedMps": 2.0,        // ignore fixes taken while the robot moved faster (m/s)
+ *     "maxOmegaRadPs": 1.5,      // ... or turned faster (rad/s). Same as the core's own gate;
+ *                                //   fixes are capture-time stamped, so motion is no longer a
+ *                                //   timing error (the old 0.75 / 0.35 were AprilTag-era)
  *     "historyS": 0.75           // pose history kept for capture-time lookups (seconds)
  *   },
  *   "limelight": {               // the camera stream (see vision.LimelightFrameSource)
@@ -435,7 +437,7 @@ public final class BeaconConfig {
     }
 
     private static FixConfig defaultFix() {
-        return new FixConfig(true, 0.3, 0.2, 0.5, 0.5, 1.0, 0.75, 0.35, 0.75, 0.02, 0.02);
+        return new FixConfig(true, 0.3, 0.2, 0.5, 0.5, 1.0, 2.0, 1.5, 0.75, 0.02, 0.02);
     }
 
     private static StreamConfig defaultStream() {

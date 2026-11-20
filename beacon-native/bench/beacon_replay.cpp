@@ -5,6 +5,7 @@
 // Common options: --params FILE_OR_JSON  --latency-ms 40  --max-frames N  --async
 //                 --view (live Rerun viewer)  --rrd FILE (save a Rerun recording)  --realtime
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -25,7 +26,7 @@ static void usage() {
 
 int main(int argc, char** argv) {
     std::string run, euroc, out, traj, mode, params, rrd;
-    bool noOdom = false, async = false, view = false, realtime = false;
+    bool noOdom = false, async = false, view = false, realtime = false, rrdFinalOnly = false;
     double latencyMs = 40;
     int maxFrames = -1, imageEvery = 1, verbose = 0;
     for (int i = 1; i < argc; ++i) {
@@ -52,6 +53,7 @@ int main(int argc, char** argv) {
         else if (a == "--async") async = true;
         else if (a == "--view") view = true;
         else if (a == "--realtime") realtime = true;
+        else if (a == "--rrd-final-only") rrdFinalOnly = true;
         else {
             usage();
             return 2;
@@ -97,6 +99,7 @@ int main(int argc, char** argv) {
         vo.blueprint = std::string(BEACON_SOURCE_DIR_BENCH) + "/bench/viewer/beacon.rbl";
         vo.worldZUp = !(mode == "explore" && (d.odom.empty() || noOdom));
         vo.imageEvery = imageEvery;
+        vo.onlyLast = rrdFinalOnly;
         if (!viewer.open(vo, err)) {
             std::fprintf(stderr, "error: %s\n", err.c_str());
             return 1;
@@ -104,9 +107,14 @@ int main(int argc, char** argv) {
         opt.viewer = &viewer;
     }
     int frameNo = 0;
-    if (verbose > 0)
-        opt.onFrame = [&](const VizFrame& v) {
-            if (frameNo++ % verbose == 0)
+    std::vector<Vec3> finalTraj;
+    std::vector<int64_t> finalT;
+    opt.onFrame = [&](const VizFrame& v) {
+            if (v.mapChanged && !v.trajectory.empty()) {
+                finalTraj = v.trajectory;
+                finalT = v.trajectoryT;
+            }
+            if (verbose > 0 && frameNo++ % verbose == 0)
                 std::printf("%5d t=%.2f tracked %zu new %zu | %s\n", frameNo - 1, (v.tNs - d.frames[0].tNs) * 1e-9,
                             v.tracked.size(), v.fresh.size(), v.text.c_str());
         };
@@ -120,6 +128,12 @@ int main(int argc, char** argv) {
                 res.frames, res.framesTracking, res.frames ? 100.0 * res.framesTracking / res.frames : 0.0,
                 res.fixes.size(), res.loopClosures, res.finalKeyframes.size(), res.finalMap.size());
     std::printf("last: %s\n", res.lastDebug.c_str());
+    if (!async && !res.frameMs.empty()) {
+        std::vector<double> ms = res.frameMs;
+        std::sort(ms.begin(), ms.end());
+        std::printf("core time per frame (this Mac, synchronous): p50 %.2f ms, p99 %.2f ms, max %.2f ms\n",
+                    ms[ms.size() / 2], ms[ms.size() * 99 / 100], ms.back());
+    }
     if (!out.empty() && !writeFixesCsv(out, res.fixes, err)) {
         std::fprintf(stderr, "error: %s\n", err.c_str());
         return 1;
@@ -138,7 +152,7 @@ int main(int argc, char** argv) {
         }
     }
     // Preliminary error numbers (NOT the plan's gate; that is tools/eval/eval_run.py).
-    if (!d.truth.empty() && !res.fixes.empty()) {
+    if (mode == "field" && !d.truth.empty() && !res.fixes.empty()) {
         std::vector<TimedPose> truth;
         for (const PoseRow& r : d.truth) truth.push_back({r.tNs, SE2(r.x, r.y, r.heading)});
         double maxE = 0, ss = 0, maxH = 0;
@@ -171,6 +185,24 @@ int main(int argc, char** argv) {
         Alignment3 a = umeyama(est, gt, true);
         std::printf("ATE after Sim(3) alignment: %.3f m over %zu poses (scale %.3f)\n", rmsError(est, gt, a), est.size(),
                     a.scale);
+        // Final (loop-corrected, BA-refined) trajectory: every frame re-expressed through its
+        // reference keyframe at the end of the run.
+        std::vector<Vec3> e2, g2;
+        j = 0;
+        for (size_t k = 0; k < finalTraj.size(); ++k) {
+            int64_t t = finalT[k];
+            while (j + 1 < d.truth6.size() && d.truth6[j + 1].tNs <= t) ++j;
+            if (j + 1 >= d.truth6.size()) break;
+            if (std::llabs(d.truth6[j].tNs - t) > 10000000) continue;
+            SE3 body = SE3::Identity();
+            body.linear() = d.truth6[j].q.toRotationMatrix();
+            body.translation() = d.truth6[j].p;
+            e2.push_back(finalTraj[k]);
+            g2.push_back((body * d.tBodyCam).translation());
+        }
+        if (e2.size() > 3)
+            std::printf("ATE of the final trajectory after Sim(3) alignment: %.3f m over %zu poses\n",
+                        rmsError(e2, g2, umeyama(e2, g2, true)), e2.size());
     }
     return 0;
 }

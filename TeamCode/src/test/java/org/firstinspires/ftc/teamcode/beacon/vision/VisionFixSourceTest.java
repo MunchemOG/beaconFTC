@@ -94,6 +94,11 @@ public class VisionFixSourceTest {
         volatile long[] fixT;
         volatile double[] fixV;
         volatile boolean destroyed;
+        volatile int destroyCount;
+        volatile String destroyThread = "";
+        volatile long destroySleepMs;
+        volatile boolean alive;
+        final List<String> events = new ArrayList<String>();
         volatile String fieldJson;
         volatile BeaconCore.Camera camera;
         volatile int status = BeaconStatus.INITIALIZING;
@@ -105,6 +110,11 @@ public class VisionFixSourceTest {
                 err[0] = createError;
                 return false;
             }
+            if (alive) {
+                err[0] = "already created";   // like NativeBeacon: the old core is not gone
+                return false;
+            }
+            alive = true;
             this.fieldJson = fieldJson;
             this.camera = cam;
             return true;
@@ -118,7 +128,17 @@ public class VisionFixSourceTest {
         }
 
         @Override
+        public void resetOdomWorld(long t) {
+            synchronized (events) {
+                events.add("reset " + t + " " + Thread.currentThread().getName());
+            }
+        }
+
+        @Override
         public void pushOdom(long t, double x, double y, double h) {
+            synchronized (events) {
+                events.add("odom " + t + " " + Thread.currentThread().getName());
+            }
             if (pushOdomSleepMs > 0) {
                 try {
                     Thread.sleep(pushOdomSleepMs);
@@ -170,6 +190,16 @@ public class VisionFixSourceTest {
 
         @Override
         public void destroy() {
+            destroyThread = Thread.currentThread().getName();
+            if (destroySleepMs > 0) {
+                try {
+                    Thread.sleep(destroySleepMs);   // beacon_destroy waits for the frame
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            destroyCount++;
+            alive = false;
             destroyed = true;
         }
     }
@@ -304,7 +334,7 @@ public class VisionFixSourceTest {
     }
 
     @Test
-    public void startPoseFollowsSetPoseAndWorldResets() throws Exception {
+    public void startPoseFollowsSetPose() throws Exception {
         HandSource pin = new HandSource();
         final FakeCore core = new FakeCore();
         VisionFixSource v = source(new FakeFrames(), pin, cfg(true, true), core);
@@ -339,17 +369,67 @@ public class VisionFixSourceTest {
                 }
             }
         }, 2000));
-        pin.epoch++;                   // Pinpoint rebooted: odometry world restarted
-        pin.x = 0;
-        pin.step(0);
-        loc.update();
+    }
+
+    @Test
+    public void pinpointRebootResetsTheCoreOdomWorldBeforeNewWorldOdometry() throws Exception {
+        HandSource pin = new HandSource();
+        final FakeCore core = new FakeCore();
+        final VisionFixSource v = source(new FakeFrames(), pin, cfg(true, true), core);
+        BeaconLocalizer loc = new BeaconLocalizer(pin, BeaconConfig.parse("{}"), v, null);
+        v.attachLocalizer(loc);
+        loc.start(null);
+        v.start();
+        loc.setPose(0, 0, 0);
+        for (int i = 0; i < 20; i++) {
+            pin.step(0.001);
+            loc.update();
+            Thread.sleep(3);
+        }
         assertTrue(waitFor(new Cond() {
             public boolean ok() {
                 synchronized (core.starts) {
-                    return core.starts.size() == 3;
+                    return core.starts.size() == 1;
                 }
             }
         }, 2000));
+        pin.epoch++;                   // Pinpoint rebooted: odometry world restarted at 0
+        pin.x = 0;
+        pin.step(0);
+        final long rebootT = pin.t;
+        loc.update();
+        assertTrue(waitFor(new Cond() {
+            public boolean ok() {
+                return v.getOdomResets() == 1;
+            }
+        }, 2000));
+        for (int i = 0; i < 5; i++) {
+            pin.step(0.001);
+            loc.update();
+            Thread.sleep(3);
+        }
+        Thread.sleep(50);
+        synchronized (core.events) {
+            int reset = core.events.indexOf("reset " + rebootT + " BeaconVisionFeed");
+            assertTrue("reset at the first new-world sample, from the odometry thread: "
+                    + core.events, reset >= 0);
+            for (int i = 0; i < core.events.size(); i++) {
+                String e = core.events.get(i);
+                long t = Long.parseLong(e.split(" ")[1]);
+                if (e.startsWith("odom") && t >= rebootT) {
+                    assertTrue("new-world odometry before the reset: " + core.events, i > reset);
+                }
+            }
+            int resets = 0;
+            for (String e : core.events) {
+                resets += e.startsWith("reset") ? 1 : 0;
+            }
+            assertEquals(1, resets);
+        }
+        synchronized (core.starts) {
+            assertEquals("the core re-anchors itself; no start pose is re-sent", 1,
+                    core.starts.size());
+        }
     }
 
     @Test
@@ -466,8 +546,9 @@ public class VisionFixSourceTest {
     }
 
     @Test
-    public void stopDestroysTheCoreOnceAndIsIdempotent() throws Exception {
+    public void stopDestroysTheCoreOffTheCallersThreadOnceAndIsIdempotent() throws Exception {
         FakeCore core = new FakeCore();
+        core.destroySleepMs = 300;     // beacon_destroy waits for the in-flight frame
         FakeFrames frames = new FakeFrames();
         final VisionFixSource v = source(frames, new HandSource(), cfg(true, true), core);
         v.stop();
@@ -477,13 +558,71 @@ public class VisionFixSourceTest {
                 return v.isCoreRunning();
             }
         }, 2000));
+        long t0 = System.nanoTime();
         v.stop();
         v.stop();
-        assertTrue(core.destroyed);
+        long tookMs = (System.nanoTime() - t0) / 1000000L;
+        assertTrue("stop() blocked the caller for " + tookMs + " ms", tookMs < 50);
         assertNull(frames.listener);
-        GrayFrame f = new GrayFrame();
-        f.ensureSize(64, 48);
-        assertEquals(0, core.frames);
         assertTrue(v.debugLine(), v.debugLine().contains("stopped"));
+        assertTrue(v.awaitStopped(3000));
+        assertTrue(core.destroyed);
+        assertEquals(1, core.destroyCount);
+        assertEquals("BeaconVisionStop", core.destroyThread);
+        assertEquals(0, core.frames);
+    }
+
+    @Test
+    public void restartAfterStopCreatesOnlyAfterTheOldCoreIsDestroyed() throws Exception {
+        FakeCore core = new FakeCore();
+        core.destroySleepMs = 200;
+        final VisionFixSource v = source(new FakeFrames(), new HandSource(), cfg(true, true),
+                core);
+        v.start();
+        assertTrue(waitFor(new Cond() {
+            public boolean ok() {
+                return v.isCoreRunning();
+            }
+        }, 2000));
+        v.stop();
+        v.start();                     // immediately: the old core is still being destroyed
+        assertTrue(v.debugLine(), waitFor(new Cond() {
+            public boolean ok() {
+                return v.isCoreRunning();
+            }
+        }, 3000));
+        assertEquals(1, core.destroyCount);
+        assertTrue(core.alive);
+    }
+
+    @Test
+    public void exploreModeParamsKeepVisionOff() throws Exception {
+        File params = tmp.newFile("params.json");
+        Files.write(params.toPath(), "{\"mode\": \"explore\"}".getBytes(Charset.forName("UTF-8")));
+        BeaconConfig base = cfg(true, true);
+        BeaconConfig c = BeaconConfig.parse("{\"vision\": {\"cameraFile\": \""
+                + base.vision.cameraFile + "\", \"fieldFile\": \"" + base.vision.fieldFile
+                + "\", \"paramsFile\": \"" + params.getPath() + "\"}}");
+        FakeCore core = new FakeCore();
+        final VisionFixSource v = source(new FakeFrames(), new HandSource(), c, core);
+        v.start();
+        assertTrue(waitFor(new Cond() {
+            public boolean ok() {
+                return v.debugLine().contains("explore");
+            }
+        }, 2000));
+        assertFalse(v.isCoreRunning());
+        assertNull(core.fieldJson);    // the core was never created
+        assertEquals("field", VisionFixSource.paramsMode("{\"lostAfterS\": 1}"));
+        assertEquals("field", VisionFixSource.paramsMode("{\"mode\": \"field\"}"));
+    }
+
+    @Test
+    public void statusConstantsMatchBeaconStatus() {
+        assertEquals(BeaconStatus.INVALID, BeaconCore.STATUS_INVALID);
+        assertEquals(BeaconStatus.INITIALIZING, BeaconCore.STATUS_INITIALIZING);
+        assertEquals(BeaconStatus.TRACKING, BeaconCore.STATUS_TRACKING);
+        assertEquals(BeaconStatus.LOST, BeaconCore.STATUS_LOST);
+        assertEquals(8, BeaconCore.FIX_NO_ODOM);
     }
 }

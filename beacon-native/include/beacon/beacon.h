@@ -15,8 +15,13 @@
  *     SystemClock.elapsedRealtimeNanos()). Odometry and frame capture times must share it.
  *
  * Threading
- *   - beacon_push_odom, beacon_push_frame, beacon_latest_fix, beacon_status and
- *     beacon_debug_line may be called from any thread. None of them waits for vision work.
+ *   - beacon_push_odom, beacon_push_frame, beacon_latest_fix, beacon_status,
+ *     beacon_debug_line, beacon_set_start_pose and beacon_reset_odom_world may be called from
+ *     any thread. None of them waits for vision work.
+ *   - beacon_create may be called from any thread (it starts the worker). beacon_destroy may
+ *     be called from any thread too, but exactly once and only after every other call on that
+ *     context has returned and no thread will call it again; it waits for the frame being
+ *     processed (tens of ms), so do not call it on the OpMode loop if that matters.
  *   - Frames are processed on the core's own worker thread. beacon_push_frame copies the
  *     image; if the worker still has an unprocessed frame it returns BEACON_DROPPED.
  *   - beacon_destroy joins the worker; call it once, after all other calls have returned.
@@ -77,6 +82,11 @@ void beacon_set_start_pose(beacon_ctx*, const beacon_pose2* field_pose);
 
 /* One Pinpoint sample in the odometry world. Time-ordered; out-of-order samples are ignored. */
 void beacon_push_odom(beacon_ctx*, const beacon_pose2* odom_world_pose);  /* any thread, O(1) */
+
+/* The odometry world restarted at t_ns (Pinpoint reboot / reset): drops buffered odometry.
+ * The core keeps its map and re-anchors the new odometry world to its last field pose
+ * (field mode) or starts a new odometry segment (explore mode). Addition to I3, 2026-11-18. */
+void beacon_reset_odom_world(beacon_ctx*, int64_t t_ns);
 
 /* One 8-bit grayscale frame. stride in bytes (>= width). Returns BEACON_OK when queued,
  * BEACON_DROPPED when the worker is busy, BEACON_ERR on bad arguments or size mismatch. */

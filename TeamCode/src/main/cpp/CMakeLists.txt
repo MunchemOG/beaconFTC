@@ -17,19 +17,9 @@ endif()
 
 add_subdirectory(${BEACON_NATIVE} ${CMAKE_CURRENT_BINARY_DIR}/beacon-native)
 
-# Workaround (requested upstream): beacon-native/src/features.h shadows bionic's system
-# <features.h>, which libc++ includes, when beacon-native/src is a -I directory. beacon-native
-# includes its own headers with quotes only, so it is put on the quote-only path instead.
-foreach(tgt beacon_core beacon)
-  foreach(prop INCLUDE_DIRECTORIES INTERFACE_INCLUDE_DIRECTORIES)
-    get_target_property(dirs ${tgt} ${prop})
-    if(dirs)
-      list(FILTER dirs EXCLUDE REGEX "beacon-native/src/?$")
-      set_property(TARGET ${tgt} PROPERTY ${prop} ${dirs})
-    endif()
-  endforeach()
-  target_compile_options(${tgt} PRIVATE -iquote ${BEACON_NATIVE}/src)
-endforeach()
+# beacon-native exposes only include/ (beacon/beacon.h); its src/ is private to its own
+# targets, so the core's headers cannot collide with the NDK's (this replaced a workaround for
+# src/features.h, renamed upstream to orb_features.h on 2026-11-18).
 
 add_library(beacon_jni SHARED beacon_jni.cpp)
 target_include_directories(beacon_jni PRIVATE ${BEACON_NATIVE}/include)

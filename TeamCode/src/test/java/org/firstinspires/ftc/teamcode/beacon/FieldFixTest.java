@@ -123,15 +123,53 @@ public class FieldFixTest {
     @Test
     public void speedGateUsesATimeWindowAtHighSampleRates() throws Exception {
         BeaconLocalizer loc = still("{}", 300);
-        // Drive at 1.0 m/s for 0.2 s (limit 0.75 m/s), sampled at 1.5 kHz.
+        // Drive at 2.5 m/s for 0.2 s (default limit 2.0 m/s), sampled at 1.5 kHz.
         for (int i = 0; i < 300; i++) {
             clk.t += PINPOINT_PERIOD_NS;
-            pin.x += 1.0 * PINPOINT_PERIOD_NS * 1e-9;
+            pin.x += 2.5 * PINPOINT_PERIOD_NS * 1e-9;
             loc.update();
         }
         fixes.fix = FieldFix.full(pin.x, 0, 0, clk.t - 100000000L);
         loc.update();
         assertEquals(0, loc.getFixesApplied());
         assertTrue(loc.getLastFixRejectReason(), loc.getLastFixRejectReason().contains("moving"));
+    }
+
+    @Test
+    public void defaultMotionGatesMatchTheCore() throws Exception {
+        BeaconConfig d = BeaconConfig.defaults();
+        assertEquals(2.0, d.fix.maxSpeedMps, 0);     // the core gates at 2.0 m/s
+        assertEquals(1.5, d.fix.maxOmegaRadPs, 0);   // ... and 1.5 rad/s
+        assertEquals(0.75, BeaconConfig.parse("{\"fix\":{\"maxSpeedMps\":0.75}}").fix.maxSpeedMps,
+                0);
+    }
+
+    /** Spins in place at {@code omega} rad/s for 0.2 s, then offers a fix from 0.1 s ago. */
+    private BeaconLocalizer spinThenFix(double omega) throws Exception {
+        BeaconLocalizer loc = still("{}", 300);
+        for (int i = 0; i < 300; i++) {
+            clk.t += PINPOINT_PERIOD_NS;
+            pin.h += omega * PINPOINT_PERIOD_NS * 1e-9;
+            loc.update();
+        }
+        double hAtFix = pin.h - omega * 0.1;
+        fixes.fix = FieldFix.full(0.02, 0, hAtFix, clk.t - 100000000L);
+        loc.update();
+        return loc;
+    }
+
+    @Test
+    public void turnAtHardMatchRateIsNoLongerRejected() throws Exception {
+        // hard-match-s5 lost 957 vision fixes to "turning 1.07 rad/s" under the old 0.35 limit
+        BeaconLocalizer loc = spinThenFix(1.07);
+        assertEquals(loc.getLastFixRejectReason(), 1, loc.getFixesApplied());
+    }
+
+    @Test
+    public void turnAboveTheDefaultIsStillRejected() throws Exception {
+        BeaconLocalizer loc = spinThenFix(1.8);
+        assertEquals(0, loc.getFixesApplied());
+        assertTrue(loc.getLastFixRejectReason(),
+                loc.getLastFixRejectReason().contains("turning"));
     }
 }

@@ -234,22 +234,36 @@ public class LimelightFrameSourceTest {
         });
         s.start();
         GrayFrame f = new GrayFrame();
-        long[] took = new long[2000000];
-        int n = 0;
+        // Durations go into a fixed histogram of 10 us buckets (last bucket = 20 ms and up),
+        // so the loop runs for the full 1.5 s however fast latest() is. (A sample array that
+        // ended the loop when full stopped it after ~0.1 s on an idle machine.)
+        long[] hist = new long[2001];
+        long n = 0;
+        long worst = 0;
         long end = System.currentTimeMillis() + 1500;
-        while (System.currentTimeMillis() < end && n < took.length) {
+        while (System.currentTimeMillis() < end) {
             long t0 = System.nanoTime();
             s.latest(f);
-            took[n++] = System.nanoTime() - t0;
+            long d = System.nanoTime() - t0;
+            hist[(int) Math.min(hist.length - 1, d / 10000L)]++;
+            worst = Math.max(worst, d);
+            n++;
         }
-        java.util.Arrays.sort(took, 0, n);
         // The lock is only ever held for one frame copy or a reference swap. A single slow
         // sample can be a JVM/OS pause, so judge the 99.9th percentile; report the worst.
-        long p999 = took[(int) (n * 0.999)];
-        assertTrue("latest() p99.9 " + p999 / 1e6 + " ms (worst " + took[n - 1] / 1e6
-                + " ms over " + n + " calls)", p999 < 2000000L);
+        long rank = (long) Math.ceil(n * 0.999);
+        long seen = 0;
+        int bucket = 0;
+        while (bucket < hist.length && (seen += hist[bucket]) < rank) {
+            bucket++;
+        }
+        double p999Ms = (bucket + 1) * 0.01;
+        assertTrue("latest() p99.9 <= " + p999Ms + " ms (worst " + worst / 1e6 + " ms over " + n
+                + " calls)", p999Ms <= 2.0);
         synchronized (stamps) {
-            assertTrue(stamps.size() > 10);
+            assertTrue("listener saw " + stamps.size() + " frames in 1.5 s from a 100 fps "
+                    + "server (" + n + " latest() calls; source: " + s.debugLine() + ")",
+                    stamps.size() > 10);
             for (int i = 1; i < stamps.size(); i++) {
                 assertTrue("t_ns not increasing at " + i, stamps.get(i) > stamps.get(i - 1));
             }

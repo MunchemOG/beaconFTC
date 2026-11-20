@@ -40,6 +40,7 @@ public:
     int64_t oldestT() const;
     size_t size() const;
     void dropOlderThan(int64_t tNs);
+    void clear();
 
 private:
     // Caller holds mu_. Index i counts from the oldest sample.
@@ -72,6 +73,13 @@ public:
      * instant when the odometry read odomAtFix. Returns the Mahalanobis^2 of the innovation.
      */
     double update(const SE2& fix, const Mat3& fixCov, const SE2& odomAtFix);
+
+    /** Adds uncertainty (x, y, theta of the alignment), e.g. after an odometry slip. */
+    void inflate(double sxy, double sth) {
+        cov_(0, 0) += sxy * sxy;
+        cov_(1, 1) += sxy * sxy;
+        cov_(2, 2) += sth * sth;
+    }
 
     /** Covariance of the predicted robot field pose for odometry pose `odom` (field frame). */
     Mat3 predictedCov(const SE2& odom) const;

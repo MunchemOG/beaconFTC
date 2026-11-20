@@ -5,7 +5,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "dataset.h"
-#include "features.h"
+#include "orb_features.h"
 #include "matcher.h"
 
 using namespace beacon;
