@@ -603,3 +603,12 @@ Changes and measurements:
   source's frames, and refuses (exit 2, removes the output) unless frames.csv, camera.json, field.json, truth.csv and
   hive.csv are byte-identical to the source's. Start error comes from the new profile (nominal: exact start).
 - tools/sim/runs/nominal-match-s1..s8 (from hard-match-s1..s5 and heldout-match-s6..s8), about 3.5 MB each.
+
+## 2026-11-19 — Round 5: nominal-odometry bracket (orchestrator, round-4 core)
+- Scored the frozen round-4 beacon_replay on nominal-match-s1..s8 (same frames as hard/heldout runs, odometry
+  regenerated with --odom-profile nominal via tools/sim/make_odom_variant.py). Odom-only via tools/eval/odom_only.py.
+- Stage 1 max error (cm), odom-only / fused (fused RMS):
+  s1 4.68/2.05 (0.35) · s2 4.63/2.28 (0.41) · s3 5.01/3.02 (0.63) · s4 6.97/2.00 (0.42) · s5 4.43/2.93 (0.73) ·
+  s6 3.83/2.66 (0.53) · s7 7.61/2.57 (0.49) · s8 3.62/3.95 (0.51).
+- Fused passes 8/8 (max 2.0-4.0 cm); odom-only passes 5/8. With hard odometry the same core passes 1/8 (4.2-13 cm).
+  So Beacon's expected range is ~2-4 cm max (realistic Pinpoint) to ~7-13 cm (pessimistic). C3 targets the hard end.
