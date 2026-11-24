@@ -1,0 +1,259 @@
+#include "params.h"
+
+#include <cmath>
+#include <functional>
+#include <map>
+#include <nlohmann/json.hpp>
+
+namespace beacon {
+
+namespace {
+
+using json = nlohmann::json;
+
+bool readDouble(const json& v, double& out, const std::string& key, std::string& err) {
+    if (!v.is_number() || !std::isfinite(v.get<double>())) {
+        err = "params: \"" + key + "\" must be a finite number";
+        return false;
+    }
+    out = v.get<double>();
+    return true;
+}
+
+bool readInt(const json& v, int& out, const std::string& key, std::string& err) {
+    if (!v.is_number_integer()) {
+        err = "params: \"" + key + "\" must be an integer";
+        return false;
+    }
+    out = v.get<int>();
+    return true;
+}
+
+bool readBool(const json& v, bool& out, const std::string& key, std::string& err) {
+    if (!v.is_boolean()) {
+        err = "params: \"" + key + "\" must be true or false";
+        return false;
+    }
+    out = v.get<bool>();
+    return true;
+}
+
+}  // namespace
+
+bool Params::parse(const char* text, Params& p, std::string& err) {
+    p = Params();
+    if (text == nullptr || text[0] == '\0') return true;
+    json doc = json::parse(text, nullptr, /*allow_exceptions=*/false, /*ignore_comments=*/true);
+    if (doc.is_discarded() || !doc.is_object()) {
+        err = "params: not a JSON object";
+        return false;
+    }
+    using Reader = std::function<bool(const json&, const std::string&)>;
+    std::string* e = &err;
+    auto d = [e](double& f) {
+        double* pf = &f;
+        return Reader([e, pf](const json& v, const std::string& k) { return readDouble(v, *pf, k, *e); });
+    };
+    auto i = [e](int& f) {
+        int* pf = &f;
+        return Reader([e, pf](const json& v, const std::string& k) { return readInt(v, *pf, k, *e); });
+    };
+    auto b = [e](bool& f) {
+        bool* pf = &f;
+        return Reader([e, pf](const json& v, const std::string& k) { return readBool(v, *pf, k, *e); });
+    };
+    std::map<std::string, Reader> readers = {
+        {"synchronous", b(p.synchronous)},
+        {"lostAfterS", d(p.lostAfterS)},
+        {"odomMaxExtrapolateS", d(p.odomMaxExtrapolateS)},
+        {"odomHistoryS", d(p.odomHistoryS)},
+        {"startSigmaXY", d(p.startSigmaXY)},
+        {"startSigmaHeading", d(p.startSigmaHeading)},
+        {"driftPerMetre", d(p.driftPerMetre)},
+        {"driftHeadingPerRad", d(p.driftHeadingPerRad)},
+        {"driftHeadingPerS", d(p.driftHeadingPerS)},
+        {"odomScaleEstimate", b(p.odomScaleEstimate)},
+        {"odomScaleMinPathM", d(p.odomScaleMinPathM)},
+        {"odomScaleMaxPairS", d(p.odomScaleMaxPairS)},
+        {"odomScaleForget", d(p.odomScaleForget)},
+        {"odomScaleMinInfo", d(p.odomScaleMinInfo)},
+        {"noOdomSigmaXY", d(p.noOdomSigmaXY)},
+        {"noOdomSigmaHeading", d(p.noOdomSigmaHeading)},
+        {"orbFeatures", i(p.orbFeatures)},
+        {"orbScaleFactor", d(p.orbScaleFactor)},
+        {"orbLevels", i(p.orbLevels)},
+        {"orbFastThreshold", i(p.orbFastThreshold)},
+        {"orbMinFastThreshold", i(p.orbMinFastThreshold)},
+        {"edgeSampleStepPx", d(p.edgeSampleStepPx)},
+        {"edgeSearchMaxPx", d(p.edgeSearchMaxPx)},
+        {"edgeSearchMinPx", d(p.edgeSearchMinPx)},
+        {"edgeMinGradient", d(p.edgeMinGradient)},
+        {"edgeHuberPx", d(p.edgeHuberPx)},
+        {"edgeSigmaPx", d(p.edgeSigmaPx)},
+        {"edgeCorrelationInflation", d(p.edgeCorrelationInflation)},
+        {"edgeMaxRangeM", d(p.edgeMaxRangeM)},
+        {"edgeMaxSamplesPerEdge", i(p.edgeMaxSamplesPerEdge)},
+        {"edgeUsePolarity", b(p.edgeUsePolarity)},
+        {"edgeSeamWeight", d(p.edgeSeamWeight)},
+        {"edgeSeamMaxRangeM", d(p.edgeSeamMaxRangeM)},
+        {"edgeSeamMinContrast", d(p.edgeSeamMinContrast)},
+        {"edgePostAsRidge", b(p.edgePostAsRidge)},
+        {"postWidthM", d(p.postWidthM)},
+        {"seamWidthM", d(p.seamWidthM)},
+        {"hiveStartEvidence", d(p.hiveStartEvidence)},
+        {"hiveEvidenceDecay", d(p.hiveEvidenceDecay)},
+        {"hiveEvidenceGain", d(p.hiveEvidenceGain)},
+        {"hiveDecide", d(p.hiveDecide)},
+        {"hiveMinSamples", i(p.hiveMinSamples)},
+        {"hiveSupportNeutral", d(p.hiveSupportNeutral)},
+        {"wideSearchSigmaXY", d(p.wideSearchSigmaXY)},
+        {"wideSearchSigmaHeading", d(p.wideSearchSigmaHeading)},
+        {"wideSearchPriorWeight", d(p.wideSearchPriorWeight)},
+        {"wideAmbiguityMinInliers", d(p.wideAmbiguityMinInliers)},
+        {"wideAmbiguityFraction", d(p.wideAmbiguityFraction)},
+        {"edgeWindowFrames", i(p.edgeWindowFrames)},
+        {"edgeWideWindowFrames", i(p.edgeWideWindowFrames)},
+        {"wideMinSpreadM", d(p.wideMinSpreadM)},
+        {"wideMinTurnRad", d(p.wideMinTurnRad)},
+        {"edgeWindowMinSpacingS", d(p.edgeWindowMinSpacingS)},
+        {"gateMaxOmegaRadS", d(p.gateMaxOmegaRadS)},
+        {"gateMaxSpeedMps", d(p.gateMaxSpeedMps)},
+        {"gateMinInliers", i(p.gateMinInliers)},
+        {"gateMinInlierRatio", d(p.gateMinInlierRatio)},
+        {"gateMaxSigmaXY", d(p.gateMaxSigmaXY)},
+        {"gateMaxSigmaHeading", d(p.gateMaxSigmaHeading)},
+        {"gateMaxChi2", d(p.gateMaxChi2)},
+        {"gateChi2FloorXY", d(p.gateChi2FloorXY)},
+        {"gateChi2FloorHeading", d(p.gateChi2FloorHeading)},
+        {"relockAfterRejects", i(p.relockAfterRejects)},
+        {"relockCheckS", d(p.relockCheckS)},
+        {"relockGridXY", d(p.relockGridXY)},
+        {"relockGridHeading", d(p.relockGridHeading)},
+        {"relockMargin", d(p.relockMargin)},
+        {"relockAgreeXY", d(p.relockAgreeXY)},
+        {"relockAgreeHeading", d(p.relockAgreeHeading)},
+        {"relockAgreeMaxS", d(p.relockAgreeMaxS)},
+        {"searchSolvesPerFrame", i(p.searchSolvesPerFrame)},
+        {"searchBudgetMs", d(p.searchBudgetMs)},
+        {"searchRescoreTop", i(p.searchRescoreTop)},
+        {"stillRelockMinInliers", i(p.stillRelockMinInliers)},
+        {"stillRelockMaxSigmaXY", d(p.stillRelockMaxSigmaXY)},
+        {"partMinSamples", i(p.partMinSamples)},
+        {"partMinInlierFrac", d(p.partMinInlierFrac)},
+        {"fixSigmaFloorXY", d(p.fixSigmaFloorXY)},
+        {"fixSigmaFloorHeading", d(p.fixSigmaFloorHeading)},
+        {"fixSigmaPerQXY", d(p.fixSigmaPerQXY)},
+        {"fixSigmaPerQHeading", d(p.fixSigmaPerQHeading)},
+        {"fixSigmaQuadratic", d(p.fixSigmaQuadratic)},
+        {"fixSigmaKneeQ", d(p.fixSigmaKneeQ)},
+        {"relockSigmaXY", d(p.relockSigmaXY)},
+        {"relockSigmaHeading", d(p.relockSigmaHeading)},
+        {"relockWideSigmaXY", d(p.relockWideSigmaXY)},
+        {"relockWideSigmaHeading", d(p.relockWideSigmaHeading)},
+        {"usePoints", b(p.usePoints)},
+        {"pointFeatures", i(p.pointFeatures)},
+        {"pointLevels", i(p.pointLevels)},
+        {"pointFastThreshold", i(p.pointFastThreshold)},
+        {"pointMinRangeM", d(p.pointMinRangeM)},
+        {"pointMaxRangeM", d(p.pointMaxRangeM)},
+        {"pointWallMarginM", d(p.pointWallMarginM)},
+        {"pointEdgeMarginPx", d(p.pointEdgeMarginPx)},
+        {"pointMaskBlockPx", i(p.pointMaskBlockPx)},
+        {"pointCreateMaxSigmaXY", d(p.pointCreateMaxSigmaXY)},
+        {"pointCreateMaxPerKf", i(p.pointCreateMaxPerKf)},
+        {"pointCreateMinS", d(p.pointCreateMinS)},
+        {"pointTargetVisible", i(p.pointTargetVisible)},
+        {"pointMaxMatchPerFrame", i(p.pointMaxMatchPerFrame)},
+        {"pointMatchBudgetMs", d(p.pointMatchBudgetMs)},
+        {"pointMaxPoints", i(p.pointMaxPoints)},
+        {"pointKfMinS", d(p.pointKfMinS)},
+        {"pointKfMinMoveM", d(p.pointKfMinMoveM)},
+        {"pointKfMinTurnRad", d(p.pointKfMinTurnRad)},
+        {"pointMatureObs", i(p.pointMatureObs)},
+        {"pointMatureBaselineM", d(p.pointMatureBaselineM)},
+        {"pointConsistPx", d(p.pointConsistPx)},
+        {"pointCullPx", d(p.pointCullPx)},
+        {"pointCandidateMaxS", d(p.pointCandidateMaxS)},
+        {"pointMinFoundRatio", d(p.pointMinFoundRatio)},
+        {"pointCandGatePx", d(p.pointCandGatePx)},
+        {"pointMaxStrikes", i(p.pointMaxStrikes)},
+        {"pointPatchHalf", i(p.pointPatchHalf)},
+        {"pointMinNcc", d(p.pointMinNcc)},
+        {"pointNccAmbiguity", d(p.pointNccAmbiguity)},
+        {"pointMinPatchStd", d(p.pointMinPatchStd)},
+        {"pointRefRefreshM", d(p.pointRefRefreshM)},
+        {"pointRefreshScale", d(p.pointRefreshScale)},
+        {"pointRefreshNcc", d(p.pointRefreshNcc)},
+        {"pointSearchMinPx", d(p.pointSearchMinPx)},
+        {"pointSearchMaxPx", d(p.pointSearchMaxPx)},
+        {"pointWeight", d(p.pointWeight)},
+        {"pointHuberPx", d(p.pointHuberPx)},
+        {"pointSigmaPx", d(p.pointSigmaPx)},
+        {"pointCorrelationInflation", d(p.pointCorrelationInflation)},
+        {"pointCheckMinMatched", i(p.pointCheckMinMatched)},
+        {"pointCheckMinInlierFrac", d(p.pointCheckMinInlierFrac)},
+        {"pointRelockMinMatched", i(p.pointRelockMinMatched)},
+        {"pointRelockMinFrac", d(p.pointRelockMinFrac)},
+        {"pointSurfaceTolM", d(p.pointSurfaceTolM)},
+        {"exploreInitMinMatches", i(p.exploreInitMinMatches)},
+        {"exploreInitMinParallaxDeg", d(p.exploreInitMinParallaxDeg)},
+        {"exploreInitWindow", i(p.exploreInitWindow)},
+        {"exploreLoopClosing", b(p.exploreLoopClosing)},
+        {"exploreLocalWindow", i(p.exploreLocalWindow)},
+        {"exploreGlobalBA", b(p.exploreGlobalBA)},
+        {"exploreGlobalBAIterations", i(p.exploreGlobalBAIterations)},
+        {"exploreMaxFramesBetweenKf", i(p.exploreMaxFramesBetweenKf)},
+        {"exploreAtlasMaps", i(p.exploreAtlasMaps)},
+        {"exploreLostFramesNewMap", i(p.exploreLostFramesNewMap)},
+        {"exploreAtlasEvery", i(p.exploreAtlasEvery)},
+        {"exploreAtlasCands", i(p.exploreAtlasCands)},
+        {"relocMinInliers", i(p.relocMinInliers)},
+        {"relocMinCommonFrac", d(p.relocMinCommonFrac)},
+        {"exploreMinFramesBetweenKf", i(p.exploreMinFramesBetweenKf)},
+        {"exploreReobsMinGapKf", i(p.exploreReobsMinGapKf)},
+    };
+    for (auto it = doc.begin(); it != doc.end(); ++it) {
+        const std::string& key = it.key();
+        if (key == "mode") {
+            if (it->is_string() && it->get<std::string>() == "field") {
+                p.mode = Mode::Field;
+            } else if (it->is_string() && it->get<std::string>() == "explore") {
+                p.mode = Mode::Explore;
+            } else {
+                err = "params: \"mode\" must be \"field\" or \"explore\"";
+                return false;
+            }
+            continue;
+        }
+        if (key == "vocabularyPath") {
+            if (!it->is_string()) {
+                err = "params: \"vocabularyPath\" must be a string";
+                return false;
+            }
+            p.vocabularyPath = it->get<std::string>();
+            continue;
+        }
+        auto r = readers.find(key);
+        if (r == readers.end()) {
+            err = "params: unknown key \"" + key + "\"";
+            return false;
+        }
+        if (!r->second(*it, key)) return false;
+    }
+    if (p.orbFeatures < 50 || p.orbLevels < 1 || p.orbScaleFactor <= 1.0) {
+        err = "params: ORB settings out of range";
+        return false;
+    }
+    if (p.pointFeatures < 50 || p.pointLevels < 1 || p.pointMaskBlockPx < 2 || p.pointMatureObs < 2 ||
+        p.pointMaxPoints < 100 || p.pointMaxRangeM <= p.pointMinRangeM) {
+        err = "params: surface point settings out of range";
+        return false;
+    }
+    if (p.lostAfterS <= 0 || p.odomHistoryS <= 0) {
+        err = "params: lostAfterS and odomHistoryS must be > 0";
+        return false;
+    }
+    return true;
+}
+
+}  // namespace beacon

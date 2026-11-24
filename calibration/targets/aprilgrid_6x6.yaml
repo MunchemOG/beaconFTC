@@ -1,0 +1,17 @@
+# AprilGrid calibration target, 6 x 6 tags, Kalibr layout (tag id 0 at the bottom-left of the
+# printed grid, ids rise to the right and then upward).
+#
+# BENCH USE ONLY. This board carries tag36h11 imagery. FTC rule R202 C forbids imagery on the
+# robot that mimics 36h11 AprilTags, so never leave this printed board mounted on a robot.
+#
+# Generate the printable page with:
+#   calibration/.venv/bin/python calibration/tools/make_board.py calibration/targets/aprilgrid_6x6.yaml --paper tabloid
+# Then MEASURE the printed tag edge (black square, outside edge to outside edge) with a ruler or
+# calipers, type the measured value into tagSize below, and set printed_size_verified to true.
+target_type: aprilgrid
+dictionary: DICT_APRILTAG_36h11   # OpenCV aruco dictionary; do not change for an aprilgrid
+tagCols: 6
+tagRows: 6
+tagSize: 0.035        # metres, edge of one black tag square. Nominal until you measure the print.
+tagSpacing: 0.3       # gap between tags as a fraction of tagSize (Kalibr convention)
+printed_size_verified: false   # set to true after measuring the print and editing tagSize
