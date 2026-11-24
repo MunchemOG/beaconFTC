@@ -93,5 +93,5 @@ fails and you cannot fix it, report the failure with its output. That is a usefu
 that says "done" over something broken costs the team far more than an honest "blocked".
 
 When the spec turns out to be wrong or impossible (an API that no longer exists, a version that
-will not resolve), follow `docs/archive/astro-spec/CLAUDE.md`: record the finding in `DECISIONS.md`, choose
+will not resolve), stop, record the finding in `DECISIONS.md`, choose
 the smallest change that keeps the spec's intent, and carry on.
