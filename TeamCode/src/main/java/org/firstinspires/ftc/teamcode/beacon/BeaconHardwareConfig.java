@@ -25,8 +25,10 @@ public class BeaconHardwareConfig {
      * (Y) pod is (behind is negative). Wrong values show up as the pose drawing a circle when
      * the robot spins in place; the calibration OpMode measures them.
      */
-    public double xPodOffsetMm = 0;
-    public double yPodOffsetMm = 0;
+    // From PollenBotLimelightTest.step (2026-11-20): X (forward-rolling) pod 98.4 mm left of the
+    // wheelbase centre, Y (sideways-rolling) pod 138.9 mm behind it. Check against the robot.
+    public double xPodOffsetMm = 98.4;
+    public double yPodOffsetMm = -138.9;
 
     /** goBILDA_4_BAR_POD or goBILDA_SWINGARM_POD, whichever you built. */
     public GoBildaPinpointDriver.GoBildaOdometryPods pods =
@@ -37,8 +39,9 @@ public class BeaconHardwareConfig {
     /** The X pod must count UP driving forward, the Y pod UP strafing LEFT. */
     public GoBildaPinpointDriver.EncoderDirection xDirection =
             GoBildaPinpointDriver.EncoderDirection.FORWARD;
+    // REVERSED on this robot: same as ElectroLarp-Biobuzz Constants.localizerConfig.
     public GoBildaPinpointDriver.EncoderDirection yDirection =
-            GoBildaPinpointDriver.EncoderDirection.FORWARD;
+            GoBildaPinpointDriver.EncoderDirection.REVERSED;
 
     /**
      * Pinpoint yaw scalar. 0 = keep the value goBILDA tuned at the factory (recommended).
@@ -69,6 +72,10 @@ public class BeaconHardwareConfig {
     public String frontRightName = "frontRight";
     public String backLeftName = "backLeft";
     public String backRightName = "backRight";
-    /** Usual for mecanum: the left side motors are mounted mirrored. */
+    /**
+     * true = left motors REVERSE, right FORWARD. ElectroLarp's directions (false) made the robot
+     * drive backwards on the first test (2026-11-20), so this is back to true. If forward is
+     * right but strafe or turning is mirrored, tell me which; do not guess.
+     */
     public boolean reverseLeftSide = true;
 }

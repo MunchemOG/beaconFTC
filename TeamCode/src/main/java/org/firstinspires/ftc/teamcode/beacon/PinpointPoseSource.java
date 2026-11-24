@@ -304,6 +304,15 @@ public final class PinpointPoseSource implements PoseSource {
         return sb.toString();
     }
 
+    /**
+     * Raw Pinpoint values straight from the driver (cached from the last read; no I2C), in
+     * inches and degrees, plus the raw pod encoder counts. Empty when not a real driver.
+     * Compare with the Beacon pose to tell a pod, IMU or configuration problem apart.
+     */
+    public String rawLine() {
+        return reader instanceof DriverReader ? ((DriverReader) reader).raw() : "";
+    }
+
     private static boolean fin(double v) {
         return !Double.isNaN(v) && !Double.isInfinite(v);
     }
@@ -349,6 +358,14 @@ public final class PinpointPoseSource implements PoseSource {
         @Override
         public double loopHz() {
             return d.getFrequency();
+        }
+
+        String raw() {
+            return String.format("x %.2f in  y %.2f in  h %.1f deg | encX %d  encY %d | "
+                            + "yawScalar %.4f",
+                    d.getPosX(DistanceUnit.INCH), d.getPosY(DistanceUnit.INCH),
+                    d.getHeading(AngleUnit.DEGREES), d.getEncoderX(), d.getEncoderY(),
+                    d.getYawScalar());
         }
 
         /** Sends offsets, resolution, directions and (if set) the yaw scalar. I2C writes. */

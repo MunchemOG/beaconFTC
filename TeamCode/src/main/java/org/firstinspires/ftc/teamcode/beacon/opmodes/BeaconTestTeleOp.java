@@ -78,11 +78,13 @@ public class BeaconTestTeleOp extends LinearOpMode {
                 drive.drive(gamepad1, 0.4);
 
                 Velocity2d v = rig.localizer.getVelocity();
-                telemetry.addData("Pose m", "x %.3f  y %.3f  h %.1f deg", p.x, p.y,
-                        Math.toDegrees(p.heading));
-                telemetry.addData("Pose in", "x %.2f  y %.2f", p.x / 0.0254, p.y / 0.0254);
-                telemetry.addData("Velocity", "fwd %.2f  left %.2f m/s  turn %.1f deg/s",
-                        v.vx, v.vy, Math.toDegrees(v.omega));
+                telemetry.addData("Pose", "x %.2f in  y %.2f in  heading %.1f deg",
+                        p.x / 0.0254, p.y / 0.0254, Math.toDegrees(p.heading));
+                telemetry.addData("Velocity", "fwd %.1f  left %.1f in/s  turn %.1f deg/s",
+                        v.vx / 0.0254, v.vy / 0.0254, Math.toDegrees(v.omega));
+                if (rig.pinpoint != null) {
+                    telemetry.addData("Pinpoint raw", rig.pinpoint.rawLine());
+                }
                 telemetry.addData("Loop", "%.1f ms (%.0f Hz), update() %.2f ms, worst %.2f ms",
                         loopMs, loopMs > 0 ? 1000 / loopMs : 0, updMs, worstUpdMs);
                 telemetry.addData("Fix blend", "%s  (B toggles, A zeroes, X details)",

@@ -306,8 +306,8 @@ public class BeaconProbeOpMode extends LinearOpMode {
         double[] m = cfg.probe.marks.get(markIdx);
         r.addMark(SystemClock.elapsedRealtimeNanos(), m[0], m[1], m[2]);
         Pose2dStamped p = rig.localizer.getPose();
-        recNote = String.format(Locale.US, "mark %d recorded; Beacon says %.3f, %.3f, %.1f deg",
-                markIdx, p.x, p.y, Math.toDegrees(p.heading));
+        recNote = String.format(Locale.US, "mark %d recorded; Beacon says %.2f in, %.2f in, %.1f deg",
+                markIdx, p.x / 0.0254, p.y / 0.0254, Math.toDegrees(p.heading));
     }
 
     private void toggleLedTest() {
@@ -370,16 +370,19 @@ public class BeaconProbeOpMode extends LinearOpMode {
                 + (blinker != null && !blinker.getError().isEmpty() ? " | " + blinker.getError()
                 : ""));
         Pose2dStamped p = rig.localizer.getPose();
-        telemetry.addData("Beacon", "%s  x %.3f  y %.3f  h %.1f deg | update %.2f ms (worst "
-                        + "%.2f)", BeaconStatus.name(p.status), p.x, p.y,
+        telemetry.addData("Beacon", "%s  x %.2f in  y %.2f in  h %.1f deg | update %.2f ms (worst "
+                        + "%.2f)", BeaconStatus.name(p.status), p.x / 0.0254, p.y / 0.0254,
                 Math.toDegrees(p.heading), updMs, worstUpdMs);
         telemetry.addData("Pinpoint", rig.pinpoint == null ? "MISSING" : rig.pinpoint.debugLine());
+        if (rig.pinpoint != null) {
+            telemetry.addData("Pinpoint raw", rig.pinpoint.rawLine());
+        }
         if (cfg.probe.marks.isEmpty()) {
             telemetry.addData("Marks", "none in beacon.json (probe.marks)");
         } else {
             double[] m = cfg.probe.marks.get(markIdx);
-            telemetry.addData("Mark", "%d/%d at %.3f, %.3f, %.0f deg (dpad L/R)", markIdx + 1,
-                    cfg.probe.marks.size(), m[0], m[1], Math.toDegrees(m[2]));
+            telemetry.addData("Mark", "%d/%d at %.2f in, %.2f in, %.0f deg (dpad L/R)", markIdx + 1,
+                    cfg.probe.marks.size(), m[0] / 0.0254, m[1] / 0.0254, Math.toDegrees(m[2]));
         }
         for (String n : notes) {
             telemetry.addLine("!! " + n);

@@ -1,0 +1,11 @@
+{
+  // Limelight 3A mount, from PollenBotLimelightTest.step (2026-11-20).
+  // Robot frame: +x forward (intake side), +y left, +z up, origin at the wheelbase centre
+  // (the Pinpoint tracking point), z measured from the floor. Metres and RADIANS.
+  // The camera looks out the REAR of the robot (yaw = pi), mounted on its side (roll = +pi/2).
+  // roll sign is a GUESS: if the spin-in-place check drifts or the pose circles, flip it to -pi/2.
+  "T_robot_cam": {
+    "x": -0.189, "y": 0.152, "z": 0.138,
+    "roll": 1.5708, "pitch": 0.019, "yaw": 3.1416
+  }
+}
