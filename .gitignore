@@ -107,3 +107,6 @@ desktop-harness/runs/
 desktop-harness/third_party/
 desktop-harness/build/
 beacon-native/bench/testdata/runs/
+
+# Beacon
+.gradle.lock/

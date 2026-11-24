@@ -131,7 +131,7 @@ No rule requires these. They stop the loose-cable failures that cost matches.
 
 ## Auto-start placement jig
 
-`beacon-spec/specs/05-CALIBRATION.md` section C asks for this note. The Pinpoint reports
+`docs/archive/astro-spec/specs/05-CALIBRATION.md` section C asks for this note. The Pinpoint reports
 position relative to where it was zeroed. At the start of autonomous the localizer needs the robot
 at a known place in the field frame, and a jig gets the same place every time.
 

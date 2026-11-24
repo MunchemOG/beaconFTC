@@ -6,7 +6,7 @@ Append-only log of spec findings and choices. Newest at the bottom.
 The spec bundle uses the working name ASTRO (which 08-RELEASE notes collides with the Astro web
 framework). All code, paths and config use Beacon: package `...teamcode.beacon`, `BeaconLocalizer`,
 `beacon.json`, `/sdcard/FIRST/beacon/`, `beacon-native/`, `beacon_*` C API. Mapping table in
-`orchestration/CHARTER.md`.
+`docs/process/CHARTER.md`.
 
 ## 2026-11-16 orchestrator: Repo root is the spec's `ftc/` directory
 This repo is an FtcRobotController v12.0 fork, so `desktop-harness/`, `calibration/`,
@@ -230,8 +230,8 @@ accuracy while driving, Stage 1 < 5 cm after a 2:30 match, Stage 2 2-3 cm over 1
 against the physical field (perimeter walls define the frame); ground truth by tape-mark checks.
 Drivetrain 104 mm mecanum, 6000-6200 rpm motors, 113:9 -> ~2.6-2.7 m/s free; design speeds 2.7 m/s,
 7 rad/s. Approach C (lean MIT core, Pinpoint as motion prior) chosen over porting/forking ORB-SLAM3
-(GPL-3, heavy, no wheel odometry). Design: docs/superpowers/specs/2026-11-17-beacon-orbslam-design.md;
-plan: docs/superpowers/plans/2026-11-17-beacon-orbslam.md. LimelightTagSource / MegaTag code is parked.
+(GPL-3, heavy, no wheel odometry). Design: docs/design/2026-11-17-beacon-orbslam-design.md;
+plan: docs/design/2026-11-17-beacon-orbslam-plan.md. LimelightTagSource / MegaTag code is parked.
 Pinpoint tier, localizer hardening, G304 start rule and world epoch carry over (115 JVM tests re-run
 by the orchestrator 2026-11-17: 0 failures). Specs 01/03/04/05 superseded; desktop-harness OpenVINS parked.
 

@@ -2,7 +2,7 @@
 
 One JSON file per season describes the field geometry Beacon can anchor to: floor and tile grid,
 perimeter walls, and the hive. The format is plan interface **I1**
-(`docs/superpowers/plans/2026-11-17-beacon-orbslam.md`). Next season you add a new file; no
+(`docs/design/2026-11-17-beacon-orbslam-plan.md`). Next season you add a new file; no
 code changes.
 
 | File | Season | Source |

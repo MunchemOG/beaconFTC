@@ -7,7 +7,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
- * Review findings 1, 2, 3, 7, 8, 9 (orchestration/reviews/01-core.md), partial fixes, the
+ * Review findings 1, 2, 3, 7, 8, 9 (docs/reviews/01-core.md), partial fixes, the
  * motion gate, and the G304 start-pose rule. Uses a robot-pose source so the expected numbers
  * are plain.
  */

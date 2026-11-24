@@ -1,8 +1,8 @@
 # Beacon: ORB-SLAM-style field localization for FTC (design)
 
 Date: 2026-11-17. Status: draft for approval. Supersedes the localization approach in
-`beacon-spec/` (phone-camera ARCore/VINS, specs 03/04) and the AprilTag/MegaTag fix path of the
-2026-11-16 odometry tier. `beacon-spec/00-PROJECT.md` conventions (units, frames, timestamps,
+`docs/archive/astro-spec/` (phone-camera ARCore/VINS, specs 03/04) and the AprilTag/MegaTag fix path of the
+2026-11-16 odometry tier. `docs/archive/astro-spec/00-PROJECT.md` conventions (units, frames, timestamps,
 threading, logging, config) still apply unless this document says otherwise.
 
 ## 1. Intent

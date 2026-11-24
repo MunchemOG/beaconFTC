@@ -43,7 +43,7 @@ The Android library is built with the NDK 27 toolchain file directly (no Gradle)
 | `beacon_replay --run DIR [--out fixes.csv] [--mode field\|explore] [--no-odom]` | replays an I2 data set (odometry and frames merged in time, each frame delivered 40 ms after capture). Writes `t_ns,x,y,heading,sigma_xy,sigma_heading,inliers,kind`. |
 | `beacon_replay --euroc DIR [--traj traj.txt]` | EuRoC cam0 in explore mode; prints tracking %, loop closures and ATE after Sim(3) alignment. |
 | `beacon_live [--url http://limelight.local:5800] [--camera camera.json] [--mode explore\|field]` | live Limelight MJPEG stream on the Mac, viewer on by default (`--no-view` to turn it off, `--rrd FILE` to record, `--record DIR` to save an I2 run). Exit code 2 when the stream is unreachable. |
-| `scripts/fused_gate.sh RUN OUT [stage1\|stage2]` | the C4/C5 gate path: core fixes -> Java ReplayFusion (holds `orchestration/gradle.lock`) -> `tools/eval/eval_run.py` |
+| `scripts/fused_gate.sh RUN OUT [stage1\|stage2]` | the C4/C5 gate path: core fixes -> Java ReplayFusion (holds `.gradle.lock`) -> `tools/eval/eval_run.py` |
 | `beacon_overlay --run DIR --frame N --out PNG [--pose x,y,h]` | draws the field model projected with the truth (or a given) pose over a frame: checks intrinsics, mount and field-model conventions by eye. |
 | `beacon_vocab_train --out vocab.bin --euroc DIR \| --run DIR` | trains Beacon's own ORB vocabulary (no ORB-SLAM vocabulary). |
 | `beacon_make_testdata --out DIR` | minimal synthetic perimeter-only runs (used by the unit tests; the Field engineer's `tools/sim/make_dataset.py` is the real simulator). |

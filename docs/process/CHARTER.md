@@ -8,9 +8,9 @@ a list of files you own. Other engineers are working in this same checkout at th
 
 Repo root: `/Users/Mithu/StudioProjects/beaconFTC` (an FtcRobotController v12.0 fork, branch
 `beacon-build`). **Source of truth (2026-11-17):**
-`docs/superpowers/specs/2026-11-17-beacon-orbslam-design.md` (design, approved by the team) and
-`docs/superpowers/plans/2026-11-17-beacon-orbslam.md` (plan; your workstream and the shared
-interfaces I1-I4 are there). Use the conventions section of `beacon-spec/specs/00-PROJECT.md`
+`docs/design/2026-11-17-beacon-orbslam-design.md` (design, approved by the team) and
+`docs/design/2026-11-17-beacon-orbslam-plan.md` (plan; your workstream and the shared
+interfaces I1-I4 are there). Use the conventions section of `docs/archive/astro-spec/specs/00-PROJECT.md`
 (units, frames, timestamps, threading, logging, config). Specs 01, 03, 04, 05 and the phone-camera
 parts of 00/02 are superseded; do not build from them. This charter adds the following.
 
@@ -93,5 +93,5 @@ fails and you cannot fix it, report the failure with its output. That is a usefu
 that says "done" over something broken costs the team far more than an honest "blocked".
 
 When the spec turns out to be wrong or impossible (an API that no longer exists, a version that
-will not resolve), follow `beacon-spec/CLAUDE.md`: record the finding in `DECISIONS.md`, choose
+will not resolve), follow `docs/archive/astro-spec/CLAUDE.md`: record the finding in `DECISIONS.md`, choose
 the smallest change that keeps the spec's intent, and carry on.

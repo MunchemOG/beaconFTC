@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 > In this repo the orchestrator runs the workstreams below as parallel agents under
-> `orchestration/CHARTER.md` (file ownership, append-only shared logs, no git by agents, one
+> `docs/process/CHARTER.md` (file ownership, append-only shared logs, no git by agents, one
 > Gradle user at a time, evidence-style final report).
 
 **Goal:** Keep a goBILDA Pinpoint pose within 5 cm after a 2:30 match (Stage 1) and 2-3 cm over
@@ -21,7 +21,7 @@ OpenCV, Eigen, g2o or Ceres (builder's choice, BSD), Python 3.11 + numpy for too
 
 **Ambition:** the most accurate SLAM-based localizer ever built for FTC.
 
-**Spec:** `docs/superpowers/specs/2026-11-17-beacon-orbslam-design.md` (approved 2026-11-17).
+**Spec:** `docs/design/2026-11-17-beacon-orbslam-design.md` (approved 2026-11-17).
 
 ## Global Constraints
 
@@ -129,12 +129,12 @@ history sized by time: `fix.historyS` (default 0.75 s).
 
 ### Task D1: Supersede old docs
 
-**Files:** Modify `orchestration/CHARTER.md`, `beacon-spec/CLAUDE.md`, `RULES.md` (Q&A list);
+**Files:** Modify `docs/process/CHARTER.md`, `docs/archive/astro-spec/CLAUDE.md`, `RULES.md` (Q&A list);
 append `DECISIONS.md`.
 
 - [ ] Charter "What the product has to be" names the design doc + this plan as the source of truth;
       phone-camera language replaced.
-- [ ] `beacon-spec/CLAUDE.md`: banner that specs 01, 03, 04, 05 and the phone-RC parts of 00/02
+- [ ] `docs/archive/astro-spec/CLAUDE.md`: banner that specs 01, 03, 04, 05 and the phone-RC parts of 00/02
       are superseded by the design doc; conventions in 00 still apply.
 - [ ] `RULES.md`: add Q&A question "Limelight 3A frames sent to the Control Hub over USB during a
       match: is that a 'continuous video stream' under R704 D?" and note Beacon uses no AprilTags.
@@ -401,4 +401,4 @@ thread), `beacon/opmodes/BeaconProbeOpMode.java`.
 1. D1 (orchestrator) → start F, C, J in parallel.
 2. J3 first in J (hardware arrives in 3-4 days), then J1, J4, J2.
 3. F4 → F1 → F2 → F3 (F4 first: the team can use the Limelight on a Mac now); C1 uses its own stub data until F2 lands; C4/C5 gates need F2, F3, J4.
-4. Orchestrator re-runs every claimed test, then a reviewer per workstream (`orchestration/reviews/`).
+4. Orchestrator re-runs every claimed test, then a reviewer per workstream (`docs/reviews/`).

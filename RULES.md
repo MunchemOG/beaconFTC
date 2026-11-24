@@ -28,7 +28,7 @@ official Q&A before your first event.
 Every row carries one of three marks.
 
 - **Verified**: the rule text was read in this audit and the link is in the row.
-- **Corrected**: verified, and it differs from `beacon-spec/specs/07-RULES.md` or from pass 1 of
+- **Corrected**: verified, and it differs from `docs/archive/astro-spec/specs/07-RULES.md` or from pass 1 of
   this file. The row says what changed.
 - **Unverified**: the text or fact could not be reached. The claim is carried and labelled.
 

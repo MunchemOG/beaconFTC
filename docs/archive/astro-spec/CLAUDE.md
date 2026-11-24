@@ -1,9 +1,9 @@
 > **SUPERSEDED IN PART (2026-11-17).** Beacon is now ORB-SLAM-style monocular field localization
 > on a REV Control Hub with a dedicated Limelight 3A and a goBILDA Pinpoint, no AprilTags. Build
-> from `docs/superpowers/specs/2026-11-17-beacon-orbslam-design.md` and
-> `docs/superpowers/plans/2026-11-17-beacon-orbslam.md`. Specs 01, 03, 04, 05 and the phone-camera
+> from `docs/design/2026-11-17-beacon-orbslam-design.md` and
+> `docs/design/2026-11-17-beacon-orbslam-plan.md`. Specs 01, 03, 04, 05 and the phone-camera
 > parts of 00 and 02 are superseded. The conventions section of `00-PROJECT.md` still applies.
-> Name mapping ASTRO -> Beacon: `orchestration/CHARTER.md`.
+> Name mapping ASTRO -> Beacon: `docs/process/CHARTER.md`.
 
 # Working instructions for Claude Code on this repo
 
