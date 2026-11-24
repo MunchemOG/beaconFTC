@@ -49,6 +49,7 @@ add_library(beacon_core STATIC
   src/optimizer.cpp
   src/params.cpp
   src/predict.cpp
+  src/surface_map.cpp
   src/vocab.cpp
 )
 # Only include/ is public: src/ stays private so its headers never shadow system headers

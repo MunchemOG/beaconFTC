@@ -12,6 +12,8 @@
 #include "edges.h"
 #include "engine.h"
 #include "gate.h"
+#include "orb_features.h"
+#include "surface_map.h"
 
 namespace beacon {
 
@@ -19,7 +21,8 @@ namespace {
 
 class FieldEngine : public Engine {
 public:
-    FieldEngine(const FieldModel& field, Shared& s) : field_(field), edges_(field, s.camera, s.params) {
+    FieldEngine(const FieldModel& field, Shared& s)
+        : field_(field), edges_(field, s.camera, s.params), surf_(field, s.camera, s.params) {
         // Hive parts start in their rule-book start tilt (Event Field Setup Guide).
         for (const MovingPart& mp : field_.parts) {
             partEvidence_.push_back(mp.startState == 1 ? s.params.hiveStartEvidence : -s.params.hiveStartEvidence);
@@ -35,8 +38,12 @@ public:
         std::string why;
         bool ok = predict(t, s, pred, why);
         EdgeResult er;
-        bool stillRelock = false;
+        bool stillRelock = false, pointRelock = false;
+        double ptsMs = 0, ptsUpdMs = 0;
         bool accepted = false;
+        bool havePts = false;
+        pm_.mature.clear();
+        pm_.candidates.clear();
         beacon_fix fix{};
         if (ok) {
             // Poor prediction (typed start pose, long blind stretch): search wide first.
@@ -49,6 +56,16 @@ public:
             } else if (!fastNow) {
                 // Sliding window of recent frames tied together by odometry.
                 EdgeFrame f = edges_.prepare(gray, pred.odom, t);
+                if (p.usePoints) {
+                    // C3: keypoints only where the floor or a static hive frame face is seen,
+                    // matched to the surface map with the prediction.
+                    auto t0 = std::chrono::steady_clock::now();
+                    surf_.setPartStates(partState_);
+                    surf_.match(gray, pred.pose, pred.cov, s.tRobotCam, t, pm_);
+                    ptsMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    f.points = pm_.mature;
+                    havePts = true;
+                }
                 if (!window_.empty() && (t - window_.back().tNs) * 1e-9 < p.edgeWindowMinSpacingS)
                     window_.back() = std::move(f);  // keep frames spread out; newest always last
                 else
@@ -92,6 +109,13 @@ public:
                 }
                 if (!wide) {
                     er = edges_.solveWindow(fr, align_.value(), align_.cov(), s.tRobotCam, observer_ != nullptr);
+                } else if (havePts && (int)pm_.mature.size() >= p.pointRelockMinMatched) {
+                    // C3 re-lock: enough mature surface points were found around the prediction
+                    // (their correlation matches are unambiguous), so a local solve from it is
+                    // reliable; accepted only when most points agree (below). The hypothesis
+                    // search waits for this frame.
+                    er = edges_.solveWindow(fr, align_.value(), align_.cov(), s.tRobotCam, observer_ != nullptr);
+                    pointRelock = true;
                 } else if (!search_.active && !diverse && lastFixT_ != 0) {
                     // Lost precision while standing still after tracking: a local solve from the
                     // prediction (wide search range) is safer than a grid search from one view;
@@ -101,7 +125,7 @@ public:
                 } else {
                     why = search_.active ? "searching for the start pose" : "waiting for motion to resolve the start pose";
                 }
-                if (search_.active) stepSearch(fr, er, wide, s);
+                if (search_.active && !pointRelock) stepSearch(fr, er, wide, s);
             }
             // Calibrated uncertainty (fit against truth on the hard runs; see DECISIONS.md):
             // error grows with the residual RMS and falls with the inlier ratio,
@@ -126,7 +150,7 @@ public:
             g.speed = pred.speed;
             g.omega = pred.omega;
             g.hasVelocity = pred.hasVelocity;
-            g.chi2 = er.ok ? chi2(er, pred) : 0;
+            g.chi2 = er.ok ? chi2(er, pred, p) : 0;
             GateDecision d = gate(g, p);
             if (d.accept && p.partMinInlierFrac > 0 && er.worstPartSamples >= p.partMinSamples &&
                 er.worstPartFrac < p.partMinInlierFrac) {
@@ -134,10 +158,45 @@ public:
                 lastVerifyT_ = 0;  // re-check the lock as soon as the window has motion
             }
             if (er.ambiguous && d.accept) d = GateDecision{false, "ambiguous view"};
+            // Wrong-lock check (C3): mature surface points were placed by earlier good fixes;
+            // when most of them disagree with this edge solution, the edges locked wrongly.
+            if (d.accept && havePts && er.pointsMatched >= p.pointCheckMinMatched &&
+                er.pointInliers < p.pointCheckMinInlierFrac * er.pointsMatched) {
+                d = GateDecision{false, "jump: surface points disagree"};
+                lastVerifyT_ = 0;
+            }
             if (stillRelock && d.accept && (er.inliers < p.stillRelockMinInliers || sigXY > p.stillRelockMaxSigmaXY))
                 d = GateDecision{false, "still: weak re-lock"};
+            if (pointRelock && d.accept &&
+                (er.pointInliers < p.pointRelockMinMatched || er.pointInliers < p.pointRelockMinFrac * er.pointsMatched))
+                d = GateDecision{false, "points: weak re-lock"};
+            // Re-lock by agreement: a wide search exists because the prediction is no longer
+            // trusted (odometry slip, long blind stretch), yet its answer is still tested against
+            // that prediction (chi2). An answer that fails only that test is held; when the next
+            // completed search, from other frames, lands on the same pose, both are taken as
+            // the truth and the alignment is reset to it.
+            bool wideResult = searchDone_;
+            searchDone_ = false;
+            bool relockAgreed = false;
+            if (wideResult && !d.accept && d.reason.rfind("jump chi2", 0) == 0 && p.relockAgreeXY > 0) {
+                const SE2& o = window_.back().odom;
+                SE2 now = er.alignment * o;
+                if (pendRelock_ && (t - pendRelockT_) * 1e-9 <= p.relockAgreeMaxS) {
+                    SE2 prev = pendRelockAlign_ * o;
+                    if (std::hypot(now.x - prev.x, now.y - prev.y) <= p.relockAgreeXY &&
+                        std::abs(wrapAngle(now.theta - prev.theta)) <= p.relockAgreeHeading) {
+                        d = GateDecision{true, ""};
+                        relockAgreed = true;
+                    }
+                }
+                pendRelock_ = !relockAgreed;
+                pendRelockAlign_ = er.alignment;
+                pendRelockT_ = t;
+            } else if (d.accept) {
+                pendRelock_ = false;
+            }
 
-            why = d.reason;
+            if (er.ok || why.empty()) why = d.reason;
             // Repeated rejections only for disagreeing with the prediction mean the prediction
             // is what is wrong (odometry slip or heading jump in a collision): widen it so the
             // next frames can re-lock (wide search once the sigma is large).
@@ -154,6 +213,15 @@ public:
             } else if (d.accept) {
                 jumpRejects_ = 0;
             }
+            if (relockAgreed) {
+                align_.set(er.alignment, p.relockSigmaXY, p.relockSigmaHeading);
+                relocks_++;
+            }
+            if (pointRelock && d.accept) {
+                align_.set(er.alignment, p.relockSigmaXY, p.relockSigmaHeading);
+                search_.active = false;
+                relocks_++;
+            }
             if (d.accept) {
                 accepted = true;
                 fix.t_ns = t;
@@ -163,7 +231,8 @@ public:
                 fix.sigma_xy = sigXY;
                 fix.sigma_heading = sigH;
                 fix.inliers = er.inliers;
-                fix.kind = BEACON_FIX_EDGES | (noOdom_ ? BEACON_FIX_NO_ODOM : 0);
+                fix.kind = BEACON_FIX_EDGES | (noOdom_ ? BEACON_FIX_NO_ODOM : 0) |
+                           (er.pointInliers >= 10 ? BEACON_FIX_POINTS : 0);
                 if (const char* dump = std::getenv("BEACON_FIX_DUMP")) {  // bench: sigma calibration data
                     static FILE* df = nullptr;
                     if (!df) {
@@ -177,11 +246,33 @@ public:
                 }
                 applyFix(t, er, s);
                 publishFix(s, fix);
+
                 lastFixT_ = t;
                 if (!window_.empty()) updateHiveStates(window_.back(), er.pose, s);
             }
         }
+        if (havePts && ok) {
+            auto t0 = std::chrono::steady_clock::now();
+            bool agrees = er.pointsMatched >= 5 && er.pointInliers >= 0.6 * er.pointsMatched;
+            surf_.update(t, gray, pm_, er.pointInlier, accepted, agrees, align_.value(), lastOdom_, accepted ? fix.sigma_xy : 1.0,
+                         s.tRobotCam);
+            ptsUpdMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        }
         updateStatus(t, s, ok, accepted, why, er);
+        if (const char* dump = std::getenv("BEACON_FRAME_DUMP")) {  // bench: why frames gave no fix
+            static FILE* ff = nullptr;
+            if (!ff) {
+                ff = std::fopen(dump, "w");
+                if (ff) std::fprintf(ff, "t_ns,ok,accepted,inliers,samples,rms_px,pred_sxy,feats,pts_matched,pts_inliers,pts_mature,pts_total,vis_m,vis_c,cand_m,match_ms,upd_ms,fix_x,fix_y,why\n");
+            }
+            if (ff)
+                std::fprintf(ff, "%lld,%d,%d,%d,%d,%.2f,%.4f,%zu,%d,%d,%d,%zu,%d,%d,%zu,%.2f,%.2f,%.4f,%.4f,\"%s\"\n", (long long)t, ok, accepted,
+                             er.inliers, er.samples, er.rmsPx,
+                             ok ? std::sqrt(std::max(pred.cov(0, 0), pred.cov(1, 1))) : -1.0, surf_.lastDetected(),
+                             er.pointsMatched, er.pointInliers, surf_.matureCount(), surf_.points().size(), pm_.visibleMature,
+                             pm_.visibleCandidates, pm_.candidates.size(), ptsMs, ptsUpdMs,
+                             er.ok ? er.pose.x : NAN, er.ok ? er.pose.y : NAN, accepted ? "" : why.c_str());
+        }
         if (observer_) {
             VizFrame v;
             v.tNs = t;
@@ -204,6 +295,19 @@ public:
             if (firstViz_) {
                 for (const ModelEdge& e : field_.edges) v.modelEdges.push_back({e.a, e.b});
                 firstViz_ = false;
+            }
+            if (havePts) {
+                for (size_t i = 0; i < pm_.mature.size(); ++i) {
+                    const PointObs& ob = pm_.mature[i];
+                    if (ob.nCand == 0) continue;
+                    v.tracked.push_back(cv::Point2f((float)ob.cand[0].x(), (float)ob.cand[0].y()));
+                    v.trackedPoints.push_back(ob.world);
+                }
+                for (const PointObs& ob : pm_.candidates)
+                    if (ob.nCand > 0) v.fresh.push_back(cv::Point2f((float)ob.cand[0].x(), (float)ob.cand[0].y()));
+                for (const SurfacePoint& sp : surf_.points())
+                    if (sp.mature) v.mapPoints.push_back(sp.pos);
+                v.mapPointCount = (int)v.mapPoints.size();
             }
             trajectory_.push_back(v.tWorldCam.translation());
             v.trajectory = trajectory_;
@@ -238,6 +342,7 @@ private:
                 odomEpoch_ = s.odomEpoch;
                 window_.clear();
                 search_.active = false;
+                surf_.dropCandidates();
                 if (align_.initialized() && hasLastPose_) reanchor_ = true;
             }
         }
@@ -417,7 +522,10 @@ private:
             if ((dpos > 0.03 || dth > 0.026) && rs[i].inliers >= best.inliers - margin) best.ambiguous = true;
         }
         if (!search_.verify) {
-            if (wide) er = best;  // gated below (ambiguous answers are not published)
+            if (wide) {
+                er = best;  // gated below (ambiguous answers are not published)
+                searchDone_ = true;
+            }
             return;
         }
         if (!er.ok || best.ambiguous) return;
@@ -433,8 +541,13 @@ private:
         }
     }
 
-    double chi2(const EdgeResult& er, const Prediction& pred) const {
+    double chi2(const EdgeResult& er, const Prediction& pred, const Params& p) const {
+        // Fix errors are correlated over seconds (the same view gives the same bias), which
+        // neither the alignment covariance nor the fix sigma knows: a systematic floor.
         Mat3 sum = pred.cov + er.cov;
+        sum(0, 0) += p.gateChi2FloorXY * p.gateChi2FloorXY;
+        sum(1, 1) += p.gateChi2FloorXY * p.gateChi2FloorXY;
+        sum(2, 2) += p.gateChi2FloorHeading * p.gateChi2FloorHeading;
         Eigen::Vector3d r(er.pose.x - pred.pose.x, er.pose.y - pred.pose.y,
                           wrapAngle(er.pose.theta - pred.pose.theta));
         return r.dot(sum.ldlt().solve(r));
@@ -492,12 +605,12 @@ private:
         if (lastFixT_ == 0) status = BEACON_STATUS_INITIALIZING;
         else if ((t - lastFixT_) * 1e-9 > s.params.lostAfterS) status = BEACON_STATUS_LOST;
         else status = BEACON_STATUS_TRACKING;
-        std::snprintf(line, sizeof line, "vision %s: %s%s (edges %d/%d, odom scale %.3f %.3f)",
+        std::snprintf(line, sizeof line, "vision %s: %s%s (edges %d/%d, points %d/%d, map %d)",
                       status == BEACON_STATUS_TRACKING ? "tracking"
                       : status == BEACON_STATUS_LOST   ? "degraded"
                                                        : "initializing",
                       accepted ? "fix" : (predicted ? "no fix, " : ""), accepted ? "" : why.c_str(),
-                      er.inliers, er.samples, scaleX_, scaleY_);
+                      er.inliers, er.samples, er.pointInliers, er.pointsMatched, surf_.matureCount());
         std::lock_guard<std::mutex> l(s.mu);
         s.status = status;
         s.debug = line;
@@ -505,6 +618,8 @@ private:
 
     const FieldModel& field_;
     EdgeTracker edges_;
+    SurfaceMap surf_;
+    PointMatches pm_;
     Alignment align_;
     OdomBuffer selfOdom_{256};
     bool noOdom_ = false;
@@ -523,6 +638,9 @@ private:
     int jumpRejects_ = 0;
     int64_t lastVerifyT_ = 0, firstT_ = 0;
     int relocks_ = 0;
+    bool searchDone_ = false, pendRelock_ = false;
+    SE2 pendRelockAlign_;
+    int64_t pendRelockT_ = 0;
     SE2 rawLast_, corr_;
     double scaleX_ = 1.0, scaleY_ = 1.0;
     Vec2 scaleU_ = Vec2::Zero(), scaleV_ = Vec2::Zero(), scaleFixPos_ = Vec2::Zero();

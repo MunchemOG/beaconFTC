@@ -27,6 +27,26 @@ struct EdgeResult {
     double worstPartFrac = 1; // newest frame: lowest inlier fraction of a model part (a wall, the hive frame)
     int worstPartSamples = 0; //   ... with at least partMinSamples samples, and its sample count
     std::vector<std::pair<cv::Point2f, cv::Point2f>> overlay;  // projected model edges (final pose)
+    // Surface points (C3) in the solve, newest frame: matched = mature points with a descriptor
+    // match, inliers = within the inlier band at the final pose.
+    int pointsMatched = 0, pointInliers = 0;
+    double pointRmsPx = 0;
+    std::vector<char> pointInlier;  // per newest-frame point observation
+};
+
+/**
+ * One surface-point observation for the window solve: a field-surface map point (field frame,
+ * position fixed) and up to three candidate image positions (UNDISTORTED pixels) whose
+ * descriptors matched it. The residual uses the candidate nearest to the projection, like the
+ * edge samples use the nearest image edge.
+ */
+struct PointObs {
+    Vec3 world;
+    Vec2 cand[3];
+    int nCand = 0;
+    double scale = 1;  // pyramid scale of the best match (pixel noise grows with it)
+    int point = -1;    // map point index
+    int feature[3] = {-1, -1, -1};
 };
 
 /** One frame prepared for edge tracking: gradients plus the odometry pose at capture time. */
@@ -35,6 +55,7 @@ struct EdgeFrame {
     cv::Mat blur;    // blurred intensity (CV_32F), for thin dark lines (tile seams)
     SE2 odom;        // robot pose in the odometry world at capture time
     int64_t tNs = 0;
+    std::vector<PointObs> points;  // surface map points matched in this frame (may be empty)
 };
 
 class EdgeTracker {
@@ -97,6 +118,8 @@ private:
                      int onlyState = -1) const;
     void search(Sample& s, double rangePx, const EdgeFrame& f) const;
     bool project(const SE2& pose, const SE3& tRobotCam, const Vec3& pw, Vec2& px) const;
+    /** Field point -> undistorted pixel (pinhole), for surface points. */
+    bool projectUndist(const SE2& pose, const SE3& tRobotCam, const Vec3& pw, Vec2& px) const;
 
     const FieldModel& field_;
     const Camera& cam_;

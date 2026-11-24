@@ -33,6 +33,13 @@ bool EdgeTracker::project(const SE2& pose, const SE3& tRobotCam, const Vec3& pw,
     return true;
 }
 
+bool EdgeTracker::projectUndist(const SE2& pose, const SE3& tRobotCam, const Vec3& pw, Vec2& px) const {
+    Vec3 pc = cameraInField(pose, tRobotCam).inverse() * pw;
+    if (pc.z() < 0.05) return false;
+    px = cam_.toPixelNoDistortion(Vec2(pc.x() / pc.z(), pc.y() / pc.z()));
+    return true;
+}
+
 void EdgeTracker::makeSamples(const SE2& pose, const SE3& tRobotCam, std::vector<Sample>& out, int onlyPart,
                               int onlyState) const {
     out.clear();
@@ -204,7 +211,7 @@ EdgeResult EdgeTracker::solveWindow(const std::vector<const EdgeFrame*>& frames,
     std::vector<std::vector<Sample>> samples(nf);
     std::vector<std::vector<Vec2>> anchors(nf);
     std::vector<std::vector<double>> resid(nf);
-    Eigen::Matrix3d hData = Eigen::Matrix3d::Zero();
+    Eigen::Matrix3d hData = Eigen::Matrix3d::Zero(), hPts = Eigen::Matrix3d::Zero();
     const double eps = 1e-4;
     size_t total = 0;
     for (int outer = 0; outer < 4; ++outer) {
@@ -216,7 +223,9 @@ EdgeResult EdgeTracker::solveWindow(const std::vector<const EdgeFrame*>& frames,
             for (size_t i = 0; i < samples[f].size(); ++i) anchors[f][i] = samples[f][i].px;
             total += samples[f].size();
         }
-        if (total < 6) {
+        size_t nPts = 0;
+        for (size_t f = 0; f < nf; ++f) nPts += frames[f]->points.size();
+        if (total + nPts < 6) {
             res.samples = (int)total;
             return res;
         }
@@ -225,6 +234,7 @@ EdgeResult EdgeTracker::solveWindow(const std::vector<const EdgeFrame*>& frames,
             Eigen::Matrix3d h = Eigen::Matrix3d::Zero();
             Eigen::Vector3d g = Eigen::Vector3d::Zero();
             hData.setZero();
+            hPts.setZero();
             for (size_t f = 0; f < nf; ++f) {
                 const SE2& o = frames[f]->odom;
                 SE2 pose = A * o;
@@ -258,6 +268,40 @@ EdgeResult EdgeTracker::solveWindow(const std::vector<const EdgeFrame*>& frames,
                     h += w * j.transpose() * j;
                     g += w * j.transpose() * best;
                     hData += w * j.transpose() * j;
+                }
+            }
+            // Surface map points (C3): 2-D reprojection residuals to the nearest matched keypoint.
+            if (nPts > 0 && p_.pointWeight > 0) {
+                for (size_t f = 0; f < nf; ++f) {
+                    const SE2& o = frames[f]->odom;
+                    SE2 pose = A * o;
+                    for (const PointObs& ob : frames[f]->points) {
+                        Vec2 px;
+                        if (ob.nCand == 0 || !projectUndist(pose, tRobotCam, ob.world, px)) continue;
+                        Vec2 r(1e9, 1e9);
+                        for (int c = 0; c < ob.nCand; ++c)
+                            if ((px - ob.cand[c]).squaredNorm() < r.squaredNorm()) r = px - ob.cand[c];
+                        double rn = r.norm();
+                        if (rn > std::max(3.0 * p_.pointHuberPx * ob.scale, range)) continue;
+                        Eigen::Matrix<double, 2, 3> j;
+                        bool okJ = true;
+                        for (int k = 0; k < 3 && okJ; ++k) {
+                            SE2 ap = A, am = A;
+                            double* fp = k == 0 ? &ap.x : k == 1 ? &ap.y : &ap.theta;
+                            double* fm = k == 0 ? &am.x : k == 1 ? &am.y : &am.theta;
+                            *fp += eps;
+                            *fm -= eps;
+                            Vec2 pa, pb;
+                            okJ = projectUndist(ap * o, tRobotCam, ob.world, pa) && projectUndist(am * o, tRobotCam, ob.world, pb);
+                            j.col(k) = okJ ? Vec2((pa - pb) / (2 * eps)) : Vec2::Zero();
+                        }
+                        if (!okJ) continue;
+                        double hub = p_.pointHuberPx * ob.scale;
+                        double w = p_.pointWeight * (rn <= hub ? 1.0 : hub / rn) / (ob.scale * ob.scale);
+                        h += w * j.transpose() * j;
+                        g += w * j.transpose() * r;
+                        hPts += (rn <= hub ? 1.0 : hub / rn) / (ob.scale * ob.scale) * j.transpose() * j;
+                    }
                 }
             }
             // Weak prior toward the predicted alignment keeps unobservable directions in place.
@@ -310,6 +354,29 @@ EdgeResult EdgeTracker::solveWindow(const std::vector<const EdgeFrame*>& frames,
     // for residuals larger than the nominal pixel noise; then mapped to the newest pose.
     double rmsInfl = std::max(1.0, (res.rmsPx * res.rmsPx) / (p_.edgeSigmaPx * p_.edgeSigmaPx));
     Eigen::Matrix3d info = hData / (p_.edgeSigmaPx * p_.edgeSigmaPx * p_.edgeCorrelationInflation * rmsInfl * nf);
+    // Points: their positions came from earlier fixes (errors shared by many points), so their
+    // information is inflated like correlated edge samples.
+    if (p_.pointWeight > 0) info += hPts / (p_.pointSigmaPx * p_.pointSigmaPx * p_.pointCorrelationInflation * nf);
+    // Point statistics on the newest frame at the final alignment.
+    {
+        const SE2 pose = A * lastF.odom;
+        double pss = 0;
+        res.pointInlier.assign(lastF.points.size(), 0);
+        for (size_t i = 0; i < lastF.points.size(); ++i) {
+            const PointObs& ob = lastF.points[i];
+            Vec2 px;
+            if (ob.nCand == 0 || !projectUndist(pose, tRobotCam, ob.world, px)) continue;
+            res.pointsMatched++;
+            double best = 1e9;
+            for (int c = 0; c < ob.nCand; ++c) best = std::min(best, (px - ob.cand[c]).norm());
+            if (best <= 2.0 * p_.pointHuberPx * ob.scale) {
+                res.pointInliers++;
+                res.pointInlier[i] = 1;
+                pss += best * best / (ob.scale * ob.scale);
+            }
+        }
+        res.pointRmsPx = res.pointInliers ? std::sqrt(pss / res.pointInliers) : 0;
+    }
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(info);
     Mat3 cA = es.eigenvalues().minCoeff() > 1e-6 ? Mat3(info.inverse()) : Mat3(Mat3::Identity() * 1e6);
     Mat3 jf = alignJacobian(A, lastF.odom);
