@@ -254,7 +254,8 @@ void KeyFrameDatabase::erase(int kf, const BowVector& bow) {
 
 std::vector<std::pair<double, int>> KeyFrameDatabase::query(const BowVector& bow, const std::vector<int>& exclude,
                                                             double minScore,
-                                                            const std::map<int, const BowVector*>& bows) const {
+                                                            const std::map<int, const BowVector*>& bows,
+                                                            double minCommonFrac) const {
     std::map<int, int> common;
     for (const auto& w : bow) {
         auto it = index_.find(w.first);
@@ -266,7 +267,7 @@ std::vector<std::pair<double, int>> KeyFrameDatabase::query(const BowVector& bow
     for (const auto& c : common)
         if (!ex.count(c.first)) maxCommon = std::max(maxCommon, c.second);
     std::vector<std::pair<double, int>> out;
-    int minCommon = (int)(0.8 * maxCommon);
+    int minCommon = (int)(minCommonFrac * maxCommon);
     for (const auto& c : common) {
         if (ex.count(c.first) || c.second < minCommon) continue;
         auto b = bows.find(c.first);

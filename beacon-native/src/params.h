@@ -121,12 +121,19 @@ struct Params {
     std::string vocabularyPath;      // empty = loop closing off
     int exploreInitMinMatches = 100;
     double exploreInitMinParallaxDeg = 1.0;
+    int exploreInitWindow = 100;      // px: how far a feature may move between the two init frames
     bool exploreLoopClosing = true;
     int exploreLocalWindow = 10;     // covisible keyframes in local BA
     bool exploreGlobalBA = true;     // full BA after each loop closure (bench)
     int exploreGlobalBAIterations = 30;
     int exploreMaxFramesBetweenKf = 20;
-    int exploreMinFramesBetweenKf = 3;
+    int exploreAtlasMaps = 3;          // stored maps kept after tracking is lost (0 = no multi-map, wait for relocalization)
+    int exploreLostFramesNewMap = 4;   // lost this many frames in a row (map > 10 keyframes): start a new map
+    int exploreAtlasEvery = 3;         // check the new map's frames against the stored maps every n-th frame
+    double relocMinCommonFrac = 0.8;   // relocalization: keep keyframes sharing this fraction of the best one's words (ORB-SLAM: 0.8)
+    int relocMinInliers = 50;          // relocalization accepted with this many pose inliers (ORB-SLAM: 50)
+    int exploreAtlasCands = 4;         // keyframe candidates tried per stored map
+    int exploreMinFramesBetweenKf = 0;
     int exploreReobsMinGapKf = 100;   // re-observation loop: keyframes this far apart in id
 
     /** Parses json (may be null/empty). Returns false and fills err on a bad document. */

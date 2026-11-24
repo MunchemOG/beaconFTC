@@ -7,6 +7,8 @@
 //
 // Local mapping and loop closing run synchronously after each new keyframe (simple and
 // deterministic); in the threaded API a long keyframe step makes the next frames drop.
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -64,7 +66,10 @@ public:
         loop_->setFixedScale(useOdom_);
         newPoints_.clear();
         bool ok = false;
-        if (state_ == State::NotInit) {
+        if (!atlas_.empty() && vocOk_ && F.id % std::max(1, p_.exploreAtlasEvery) == 0 &&
+            (state_ == State::NotInit || state_ == State::Lost || map_.numKeyFrames() < 40) && atlasRelocalize()) {
+            ok = true;
+        } else if (state_ == State::NotInit) {
             ok = useOdom_ ? initWithOdometry() : initMonocular();
         } else {
             ok = track();
@@ -91,6 +96,53 @@ private:
         hasVelocity_ = false;
         trajectory_.clear();
         recentPoints_.clear();
+        lostFrames_ = 0;
+    }
+
+    /** Tracking is lost: keep the old map aside (bounded) and start a new one, as ORB-SLAM3's Atlas does. */
+    void stashMapAndRestart() {
+        atlas_.push_back(std::move(map_));
+        while ((int)atlas_.size() > p_.exploreAtlasMaps) {
+            size_t worst = 0;
+            for (size_t i = 1; i < atlas_.size(); ++i)
+                if (atlas_[i].numKeyFrames() < atlas_[worst].numKeyFrames()) worst = i;
+            atlas_.erase(atlas_.begin() + worst);
+        }
+        localPoints_.clear();
+        resetMap();
+        status_ = "lost: new map";
+    }
+
+    /** Looks for the current frame in the stored maps. On success that map becomes the active one
+     *  (the young map is stored in its place). Costs one BoW query + a few PnP tries per stored map. */
+    bool atlasRelocalize() {
+        int saved = relocMaxCands_;
+        relocMaxCands_ = std::max(1, p_.exploreAtlasCands);
+        bool found = false;
+        for (size_t i = 0; i < atlas_.size() && !found; ++i) {
+            if (atlas_[i].numKeyFrames() == 0) continue;
+            std::swap(map_, atlas_[i]);
+            if (relocalize()) {
+                loop_ = std::make_unique<LoopCloser>(map_, voc_, cam_, useOdom_, s_.tRobotCam, odomParams_,
+                                                     p_.exploreGlobalBA);
+                lastKf_ = refKf_;
+                lastKfFrame_ = cur_.id;
+                hasInitRef_ = false;
+                hasVelocity_ = false;
+                localPoints_.clear();
+                state_ = State::Ok;
+                lostFrames_ = 0;
+                trajectory_.clear();
+                trajectory_.push_back({cur_.tNs, {refKf_->id, cur_.tcw * refKf_->twc()}});
+                mapChanged_ = true;
+                if (atlas_[i].numKeyFrames() < 3) atlas_.erase(atlas_.begin() + i);
+                found = true;
+            } else {
+                std::swap(map_, atlas_[i]);
+            }
+        }
+        relocMaxCands_ = saved;
+        return found;
     }
 
     bool initMonocular() {
@@ -105,7 +157,7 @@ private:
             return false;
         }
         std::vector<int> m12;
-        int nm = matcher().searchForInitialization(initRef_.f, F.f, prevMatched_, m12, 100);
+        int nm = matcher().searchForInitialization(initRef_.f, F.f, prevMatched_, m12, p_.exploreInitWindow);
         if (nm < p_.exploreInitMinMatches) {
             hasInitRef_ = false;
             status_ = "initializing: move the camera sideways";
@@ -302,6 +354,7 @@ private:
         }
         if (ok) {
             state_ = State::Ok;
+            lostFrames_ = 0;
             if (last_.hasPose) {
                 velocity_ = F.tcw * last_.tcw.inverse();
                 hasVelocity_ = true;
@@ -338,6 +391,9 @@ private:
         }
         state_ = State::Lost;
         status_ = "lost: relocalizing";
+        if (++lostFrames_ >= p_.exploreLostFramesNewMap && p_.exploreAtlasMaps > 0 && !useOdom_ && vocOk_ &&
+            map_.numKeyFrames() > 10)
+            stashMapAndRestart();
         return false;
     }
 
@@ -459,13 +515,17 @@ private:
         voc_.transform(F.f.desc, F.bow, F.fv, 2);
         std::map<int, const BowVector*> bows;
         for (KeyFrame* k : map_.keyFrames()) bows[k->id] = &k->bow;
-        auto cands = map_.db.query(F.bow, {}, 0.0, bows);
+        auto cands = map_.db.query(F.bow, {}, 0.0, bows, p_.relocMinCommonFrac);
+        static const bool dbg = std::getenv("BEACON_ATLAS_DEBUG") != nullptr;
+        if (dbg) std::fprintf(stderr, "[reloc] f%ld kfs %zu cands %zu top %.3f\n", F.id, map_.numKeyFrames(), cands.size(), cands.empty() ? 0.0 : cands[0].first);
         Matcher m = matcher();
         cv::Mat K = (cv::Mat_<double>(3, 3) << cam_.fx, 0, cam_.cx, 0, cam_.fy, cam_.cy, 0, 0, 1);
-        for (size_t c = 0; c < cands.size() && c < 10; ++c) {
+        for (size_t c = 0; c < cands.size() && (int)c < relocMaxCands_; ++c) {
             KeyFrame* k = map_.kf(cands[c].second);
             std::vector<int> mm;
-            if (m.searchByBoW(k, F, mm) < 15) continue;
+            int nb = m.searchByBoW(k, F, mm);
+            if (dbg) std::fprintf(stderr, "[reloc]   cand kf%d score %.3f bow-matches %d\n", k->id, cands[c].first, nb);
+            if (nb < 15) continue;
             std::vector<cv::Point3f> obj;
             std::vector<cv::Point2f> img;
             std::vector<int> idx;
@@ -494,15 +554,16 @@ private:
             for (int i : inl) F.mps[idx[i]] = mm[idx[i]];
             F.tcw = T;
             int good = optimizeAndClean(PosePrior());
+            if (dbg) std::fprintf(stderr, "[reloc]   pnp inl %zu opt %d\n", inl.size(), good);
             if (good < 10) continue;
-            if (good < 50) {
+            if (good < p_.relocMinInliers) {
                 std::vector<int> found;
                 for (int id : F.mps)
                     if (id >= 0) found.push_back(id);
                 m.searchByProjection(F, k, found, 10, 100);
                 good = optimizeAndClean(PosePrior());
             }
-            if (good >= 50) {
+            if (good >= p_.relocMinInliers) {
                 lastRelocFrame_ = F.id;
                 refKf_ = k;
                 status_ = "relocalized";
@@ -547,6 +608,7 @@ private:
         lastKf_ = refKf_ = k;
         lastKfFrame_ = F.id;
         localMapping(k);
+        if (!useOdom_) F.tcw = k->tcw;  // the keyframe is this frame: take its BA-refined pose
         if (vocOk_ && p_.exploreLoopClosing) {
             bool closed = loop_->process(k);
             if (!loop_->debug.empty() && std::getenv("BEACON_LOOP_DEBUG")) std::fprintf(stderr, "loopdbg %s\n", loop_->debug.c_str());
@@ -817,6 +879,8 @@ private:
     Vocabulary voc_;
     bool vocOk_ = false;
     Map map_;
+    std::vector<Map> atlas_;   // stored maps (tracking was lost), oldest first
+    int lostFrames_ = 0, relocMaxCands_ = 10;
     OdomEdgeParams odomParams_;
     std::unique_ptr<LoopCloser> loop_;
     State state_ = State::NotInit;

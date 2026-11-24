@@ -55,7 +55,8 @@ public:
     void erase(int kfId, const BowVector& bow);
     /** Keyframes sharing words with `bow`, scored; excludes ids in `exclude`. */
     std::vector<std::pair<double, int>> query(const BowVector& bow, const std::vector<int>& exclude,
-                                              double minScore, const std::map<int, const BowVector*>& bows) const;
+                                              double minScore, const std::map<int, const BowVector*>& bows,
+                                              double minCommonFrac = 0.8) const;
     void clear() { index_.clear(); }
 
 private:
