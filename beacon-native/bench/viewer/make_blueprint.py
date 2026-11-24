@@ -48,10 +48,16 @@ def blueprint() -> rrb.Blueprint:
         origin="beacon/image/cam0",
         contents=["+ beacon/image/cam0/**"],
     )
+    topdown = rrb.Spatial2DView(
+        name="Top-down map",
+        origin="beacon/topdown",
+        contents=["+ beacon/topdown/**"],
+        background=[240, 240, 240],
+    )
     status = rrb.TextDocumentView(name="Status", origin="beacon/status")
     left = rrb.Vertical(status, image, row_shares=[1, 3])
     return rrb.Blueprint(
-        rrb.Horizontal(left, view3d, column_shares=[1, 2.4]),
+        rrb.Horizontal(left, rrb.Vertical(view3d, topdown, row_shares=[1, 1]), column_shares=[1, 2.4]),
         rrb.BlueprintPanel(state="expanded"),
         rrb.SelectionPanel(state="collapsed"),
         rrb.TimePanel(state="collapsed"),

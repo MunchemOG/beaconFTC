@@ -7,6 +7,8 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <opencv2/imgcodecs.hpp>
 #include <rerun.hpp>
 #include <thread>
@@ -65,6 +67,21 @@ std::vector<std::pair<Vec3, Vec3>> frustum(const SE3& t, double s) {
     return out;
 }
 
+
+// Ground-plane projection for the top-down map: forward is up on screen. Explore mode's world is the
+// first camera frame (x right, y down, z forward), so the ground plane is (x, z); field mode is z-up,
+// so it is (x, y). Rerun's 2-D y axis points down, hence the minus sign.
+rerun::Position2D ground(const Vec3& p, bool zUp) {
+    return rerun::Position2D((float)p.x(), (float)(zUp ? -p.y() : -p.z()));
+}
+
+rerun::Points2D groundPoints(const std::vector<Vec3>& pts, bool zUp, rerun::Color c, float radius) {
+    std::vector<rerun::Position2D> p;
+    p.reserve(pts.size());
+    for (const Vec3& x : pts) p.push_back(ground(x, zUp));
+    return rerun::Points2D(p).with_colors(c).with_radii(rerun::Radius::ui_points(radius));
+}
+
 bool waitForPort(int port, int timeoutMs) {
     auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < end) {
@@ -89,6 +106,7 @@ const std::vector<std::string>& viewerEntityPaths() {
         "beacon/image/cam0",       "beacon/image/cam0/tracked", "beacon/image/cam0/new", "beacon/loop_closures",
         "beacon/pose_imu",         "beacon/kfs",            "beacon/frontend_map",  "beacon/pose_graph",
         "beacon/lc_database_map",  "beacon/backend_points",
+        "beacon/topdown/points", "beacon/topdown/path", "beacon/topdown/pose", "beacon/topdown/map",
     };
     return paths;
 }
@@ -238,6 +256,38 @@ void RerunViewer::logNow(const VizFrame& v) {
         r.log("beacon/lc_database_map", points(v.mapPoints, rerun::Color(60, 60, 60), 1.0f));
         r.log("beacon/loop_closures", segments(v.loopLinks, rerun::Color(255, 0, 0), 2.0f));
         r.log("beacon/pose_graph", segments(v.graphEdges, rerun::Color(0, 160, 160), 0.6f));
+    }
+    // Top-down map: ground-plane points, path so far, and an arrow at the camera pointing the way it faces.
+    {
+        const bool zUp = opt_.worldZUp;
+        r.log("beacon/topdown/points", groundPoints(v.trackedPoints, zUp, rerun::Color(0, 200, 0), 2.0f));
+        if (v.mapChanged) {
+            std::vector<rerun::Position2D> path;
+            for (const Vec3& p : v.trajectory) path.push_back(ground(p, zUp));
+            r.log("beacon/topdown/path",
+                  rerun::LineStrips2D({rerun::LineStrip2D(path)})
+                      .with_colors(rerun::Color(30, 30, 200))
+                      .with_radii(rerun::Radius::ui_points(2.0f)));
+            r.log("beacon/topdown/map", groundPoints(v.backendPoints, zUp, rerun::Color(20, 20, 20), 1.5f));
+        }
+        if (v.poseValid) {
+            Vec3 f = v.tWorldCam.linear().col(2);  // optical axis = direction the camera faces
+            rerun::Position2D o = ground(v.tWorldCam.translation(), zUp);
+            double len = 0.4;
+            double n = std::hypot(f.x(), zUp ? f.y() : f.z());
+            if (n > 1e-6) {
+                float dx = (float)(len * f.x() / n), dy = (float)(len * (zUp ? -f.y() : -f.z()) / n);
+                double yaw = std::atan2(zUp ? f.y() : f.z(), f.x()) * 180.0 / M_PI;
+                char label[48];
+                std::snprintf(label, sizeof label, "heading %.0f deg", yaw);
+                r.log("beacon/topdown/pose",
+                      rerun::Arrows2D::from_vectors({rerun::Vector2D(dx, dy)})
+                          .with_origins({o})
+                          .with_colors(rerun::Color(255, 120, 0))
+                          .with_radii(rerun::Radius::ui_points(3.0f))
+                          .with_labels({label}));
+            }
+        }
     }
     if (!v.text.empty()) r.log("beacon/status", rerun::TextDocument(v.text));
     ++frames_;

@@ -6,7 +6,8 @@
 //   beacon_live [--url http://limelight.local:5800] [--camera camera.json]
 //               [--mode explore|field] [--field FIELD.json --start x,y,heading_deg]
 //               [--params FILE_OR_JSON] [--latency-ms 30] [--frames N] [--no-view] [--rrd FILE]
-//               [--record DIR]
+//               [--record DIR] [--no-mask-overlay]
+// By default the Limelight's crosshair (centre) and text (top-left) are scrubbed from each frame.
 // Exit code 2 when the stream cannot be reached.
 #include <sys/stat.h>
 
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
                 record;
     double latencyMs = 30;
     int maxFrames = -1;
-    bool view = true;
+    bool view = true, maskOverlay = true;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -50,6 +51,7 @@ int main(int argc, char** argv) {
         else if (a == "--rrd") rrd = next();
         else if (a == "--record") record = next();
         else if (a == "--no-view") view = false;
+        else if (a == "--no-mask-overlay") maskOverlay = false;
         else {
             std::fprintf(stderr, "unknown option %s (see the header of bench/beacon_live.cpp)\n", a.c_str());
             return 2;
@@ -138,6 +140,19 @@ int main(int argc, char** argv) {
                 warnedSize = true;
             }
             cv::resize(gray, gray, cv::Size(cam.camera.width, cam.camera.height), 0, 0, cv::INTER_AREA);
+        }
+        if (maskOverlay) {
+            // Limelight draws a crosshair at the image centre and a small text block top-left on
+            // every frame. They never move, so they would look like zero-parallax features. A
+            // median filter over those small regions removes thin strokes and keeps the rest.
+            auto scrub = [&](cv::Rect r) {
+                r &= cv::Rect(0, 0, gray.cols, gray.rows);
+                if (r.area() <= 0) return;
+                cv::Mat roi = gray(r);
+                cv::medianBlur(roi.clone(), roi, 15);
+            };
+            scrub(cv::Rect(gray.cols / 2 - 30, gray.rows / 2 - 30, 60, 60));
+            scrub(cv::Rect(0, 0, 90, 50));
         }
         int64_t t = recv - (int64_t)(latencyMs * 1e6);
         if (n == 0 && mode == "field") {

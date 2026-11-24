@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     std::string run, euroc, out, traj, mode, params, rrd;
     bool noOdom = false, async = false, view = false, realtime = false, rrdFinalOnly = false;
     double latencyMs = 40;
-    int maxFrames = -1, imageEvery = 1, verbose = 0;
+    int maxFrames = -1, imageEvery = 1, verbose = 0, stride = 1;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
         else if (a == "--latency-ms") latencyMs = std::stod(next());
         else if (a == "--max-frames") maxFrames = std::stoi(next());
         else if (a == "--image-every") imageEvery = std::stoi(next());
+        else if (a == "--stride") stride = std::max(1, std::stoi(next()));  // keep every n-th frame = n times faster motion
         else if (a == "--rrd") rrd = next();
         else if (a == "--verbose") verbose = std::stoi(next());
         else if (a == "--no-odom") noOdom = true;
@@ -82,6 +83,11 @@ int main(int argc, char** argv) {
             return 1;
         }
         params = text;
+    }
+    if (stride > 1) {
+        std::vector<decltype(d.frames)::value_type> kept;
+        for (size_t i = 0; i < d.frames.size(); i += (size_t)stride) kept.push_back(d.frames[i]);
+        d.frames = kept;
     }
     ReplayOptions opt;
     opt.paramsJson = mergeJson(params, "{\"mode\": \"" + mode + "\"}");
